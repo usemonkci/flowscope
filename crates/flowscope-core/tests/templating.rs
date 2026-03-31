@@ -1566,6 +1566,81 @@ GROUP BY customer_id
 
 #[test]
 #[cfg(feature = "templating")]
+fn dbt_same_named_ctes_in_different_models_stay_distinct() {
+    let customers = r#"
+{{ config(materialized='view') }}
+WITH scoped_data AS (
+    SELECT id
+    FROM raw_customers
+)
+SELECT id
+FROM scoped_data
+"#;
+
+    let orders = r#"
+{{ config(materialized='view') }}
+WITH scoped_data AS (
+    SELECT id
+    FROM raw_orders
+)
+SELECT id
+FROM scoped_data
+"#;
+
+    let result = analyze_dbt_files(vec![
+        FileSource {
+            name: "models/marts/customers.sql".to_string(),
+            content: customers.to_string(),
+        },
+        FileSource {
+            name: "models/marts/orders.sql".to_string(),
+            content: orders.to_string(),
+        },
+    ]);
+
+    assert!(
+        !result.summary.has_errors,
+        "Analysis should succeed: {:?}",
+        result.issues
+    );
+
+    let cte_nodes: Vec<_> = result
+        .global_lineage
+        .nodes
+        .iter()
+        .filter(|node| node.node_type == NodeType::Cte && node.canonical_name.name == "scoped_data")
+        .collect();
+
+    assert_eq!(
+        cte_nodes.len(),
+        2,
+        "same-named CTEs from different dbt models should stay distinct in global lineage"
+    );
+    assert!(
+        cte_nodes.iter().all(|node| node.statement_refs.len() == 1),
+        "dbt model-local CTEs should remain statement-local"
+    );
+
+    let output_labels: Vec<_> = result
+        .statements
+        .iter()
+        .filter_map(|statement| {
+            statement
+                .nodes
+                .iter()
+                .find(|node| node.node_type == NodeType::Output)
+                .map(|node| node.label.to_string())
+        })
+        .collect();
+
+    assert_eq!(
+        output_labels,
+        vec!["customers".to_string(), "orders".to_string()]
+    );
+}
+
+#[test]
+#[cfg(feature = "templating")]
 fn dbt_model_name_extraction_from_path() {
     // Test that model names are correctly extracted from various path formats
     let model = r#"SELECT 1 AS id"#;

@@ -2236,8 +2236,8 @@ fn repeated_cte_aliases_across_statements_keep_distinct_global_instance_nodes() 
 
     assert_eq!(
         global_org_nodes.len(),
-        3,
-        "global lineage should keep one shared org definition node plus one org b instance per statement"
+        4,
+        "global lineage should keep statement-local org definitions plus one org b instance per statement"
     );
 
     let statement_scoped_instances = global_org_nodes
@@ -2245,8 +2245,8 @@ fn repeated_cte_aliases_across_statements_keep_distinct_global_instance_nodes() 
         .filter(|node| node.statement_refs.len() == 1)
         .count();
     assert_eq!(
-        statement_scoped_instances, 2,
-        "non-definition CTE self-join instances should remain statement-local in global lineage"
+        statement_scoped_instances, 4,
+        "CTE definitions and self-join instances should remain statement-local in global lineage"
     );
 }
 

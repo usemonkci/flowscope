@@ -13,6 +13,7 @@ pub use constraints::{
 };
 pub use id::{
     generate_column_node_id, generate_edge_id, generate_node_id, generate_output_node_id,
+    generate_statement_scoped_node_id,
 };
 pub use naming::{
     canonical_name_from_object_name, extract_simple_name, extract_simple_name_from_object_name,
