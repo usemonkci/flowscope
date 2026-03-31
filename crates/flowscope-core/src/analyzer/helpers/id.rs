@@ -35,7 +35,10 @@ pub fn generate_column_node_id(parent_id: Option<&str>, column_name: &str) -> Ar
     format!("column_{hash:016x}").into()
 }
 
-/// Generate a deterministic node ID scoped to a statement.
+/// Generate a deterministic node ID scoped to a specific statement.
+///
+/// This ensures that identically-named nodes (e.g., CTEs, derived tables) in different
+/// statements produce distinct IDs, preventing unintended merging in the global graph.
 pub fn generate_statement_scoped_node_id(
     node_type: &str,
     statement_index: usize,
