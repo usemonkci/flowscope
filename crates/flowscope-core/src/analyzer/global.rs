@@ -223,14 +223,10 @@ impl<'a> Analyzer<'a> {
     fn global_node_id(&self, node: &Node, canonical: &Arc<str>) -> Arc<str> {
         match node.node_type {
             NodeType::Table | NodeType::View => self.tracker.relation_identity(canonical).0,
-            NodeType::Cte => {
-                let definition_id = generate_node_id("cte", canonical);
-                if node.id == definition_id {
-                    definition_id
-                } else {
-                    node.id.clone()
-                }
-            }
+            // CTEs and derived tables are statement-scoped in the global graph.
+            // Their IDs already encode the statement index (via generate_statement_scoped_node_id),
+            // so same-named CTEs in different statements remain distinct global nodes.
+            NodeType::Cte => node.id.clone(),
             NodeType::Column if node.qualified_name.is_some() => {
                 generate_node_id("column", canonical)
             }

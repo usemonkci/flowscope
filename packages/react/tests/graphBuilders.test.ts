@@ -625,6 +625,83 @@ describe('graphBuilders DML handling', () => {
     ).toBeDefined();
   });
 
+  it('keeps separate explicit output nodes when merged statements include multiple models', () => {
+    const customersStmt: StatementLineage = {
+      statementIndex: 0,
+      statementType: 'SELECT',
+      joinCount: 0,
+      complexityScore: 1,
+      sourceName: 'models/customers.sql',
+      nodes: [
+        { id: 'output:customers', type: 'output', label: 'customers' },
+        {
+          id: 'cte:stmt0:stg_customers',
+          type: 'cte',
+          label: 'stg_customers',
+          qualifiedName: 'stg_customers',
+        },
+        {
+          id: 'column:customers.id',
+          type: 'column',
+          label: 'customer_id',
+        },
+      ],
+      edges: [
+        {
+          id: 'own:customers',
+          from: 'output:customers',
+          to: 'column:customers.id',
+          type: 'ownership',
+        },
+      ],
+    };
+
+    const ordersStmt: StatementLineage = {
+      statementIndex: 1,
+      statementType: 'SELECT',
+      joinCount: 0,
+      complexityScore: 1,
+      sourceName: 'models/orders.sql',
+      nodes: [
+        { id: 'output:orders', type: 'output', label: 'orders' },
+        {
+          id: 'cte:stmt1:stg_customers',
+          type: 'cte',
+          label: 'stg_customers',
+          qualifiedName: 'stg_customers',
+        },
+        {
+          id: 'column:orders.id',
+          type: 'column',
+          label: 'order_id',
+        },
+      ],
+      edges: [
+        {
+          id: 'own:orders',
+          from: 'output:orders',
+          to: 'column:orders.id',
+          type: 'ownership',
+        },
+      ],
+    };
+
+    const merged = mergeStatements([customersStmt, ordersStmt]);
+    const nodes = buildFlowNodes(merged, null, '', new Set<string>(), new Set<string>());
+
+    const outputNodes = nodes.filter((node) => node.data.nodeType === 'virtualOutput');
+    const cteNodes = nodes.filter(
+      (node) => node.id === 'cte:stmt0:stg_customers' || node.id === 'cte:stmt1:stg_customers'
+    );
+
+    expect(outputNodes.map((node) => node.id).sort()).toEqual([
+      'output:customers',
+      'output:orders',
+    ]);
+    expect(outputNodes.map((node) => node.data.label).sort()).toEqual(['customers', 'orders']);
+    expect(cteNodes).toHaveLength(2);
+  });
+
   it('only marks physical tables as base tables when joins exist', () => {
     const statement: StatementLineage = {
       statementIndex: 0,

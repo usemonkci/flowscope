@@ -1,4 +1,4 @@
-import type { StatementLineage, Node, Edge } from '@pondpilot/flowscope-core';
+import type { StatementLineage, Node, Edge, AggregationInfo } from '@pondpilot/flowscope-core';
 import { JOIN_TYPE_LABELS } from '../constants';
 
 const CREATE_STATEMENT_TYPES = new Set(['CREATE_TABLE', 'CREATE_TABLE_AS', 'CREATE_VIEW']);
@@ -160,4 +160,114 @@ export function buildJoinedTableIds(edges: Edge[], nodes: Node[]): Set<string> {
 export function formatJoinType(joinType: string | undefined | null): string | undefined {
   if (!joinType) return undefined;
   return JOIN_TYPE_LABELS[joinType] || joinType.replace(/_/g, ' ');
+}
+
+/** Minimal column info returned by output column grouping. */
+export interface OutputColumnInfo {
+  id: string;
+  name: string;
+  expression?: string;
+  aggregation?: AggregationInfo;
+}
+
+/**
+ * Create a collision-safe key for a directed pair of node IDs.
+ * Uses a null separator so IDs containing any printable substring cannot collide.
+ */
+export function edgePairKey(sourceId: string, targetId: string): string {
+  return `${sourceId}\0${targetId}`;
+}
+
+/**
+ * Group columns by their output owner node ID.
+ *
+ * Columns explicitly owned by output nodes (via ownership edges) are assigned to those nodes.
+ * Unowned projected columns (no qualifiedName, not owned by any table) fall back to the
+ * virtual output node.
+ */
+export function groupOutputColumns(
+  outputNodes: Node[],
+  edges: Edge[],
+  columnNodes: Node[],
+  ownedColumnIds: Set<string>,
+  virtualOutputNodeId: string
+): Map<string, OutputColumnInfo[]> {
+  const result = new Map<string, OutputColumnInfo[]>();
+  const explicitIds = new Set(outputNodes.map((n) => n.id));
+  const ownerIds = new Map<string, string>();
+
+  for (const edge of edges) {
+    if (edge.type === 'ownership' && explicitIds.has(edge.from)) {
+      ownerIds.set(edge.to, edge.from);
+    }
+  }
+
+  for (const col of columnNodes) {
+    const explicitOwner = ownerIds.get(col.id);
+    const outputOwnerId =
+      explicitOwner ??
+      (!col.qualifiedName && !ownedColumnIds.has(col.id) ? virtualOutputNodeId : undefined);
+
+    if (!outputOwnerId) continue;
+
+    const columns = result.get(outputOwnerId) || [];
+    columns.push({
+      id: col.id,
+      name: col.label,
+      expression: col.expression,
+      aggregation: col.aggregation,
+    });
+    result.set(outputOwnerId, columns);
+  }
+
+  return result;
+}
+
+/**
+ * Resolve the full output mapping for edge building.
+ *
+ * Augments `columnToTableMap` in place with output node ownership, then returns
+ * the set of active output node IDs and the set of output column IDs.
+ */
+export function resolveOutputMapping(
+  edges: Edge[],
+  explicitOutputNodeIds: Set<string>,
+  columnNodes: Node[],
+  columnToTableMap: Map<string, string>,
+  isSelect: boolean,
+  virtualOutputNodeId: string
+): { outputNodeIds: Set<string>; outputColumnIds: Set<string> } {
+  for (const edge of edges) {
+    if (edge.type === 'ownership' && explicitOutputNodeIds.has(edge.from)) {
+      columnToTableMap.set(edge.to, edge.from);
+    }
+  }
+
+  if (isSelect) {
+    for (const col of columnNodes) {
+      if (!columnToTableMap.has(col.id)) {
+        columnToTableMap.set(col.id, virtualOutputNodeId);
+      }
+    }
+  }
+
+  const outputNodeIds = new Set(explicitOutputNodeIds);
+  if (
+    isSelect &&
+    columnNodes.some((col) => columnToTableMap.get(col.id) === virtualOutputNodeId)
+  ) {
+    outputNodeIds.add(virtualOutputNodeId);
+  }
+
+  const outputColumnIds = new Set<string>();
+  if (isSelect) {
+    for (const col of columnNodes) {
+      const ownerId = columnToTableMap.get(col.id);
+      if (ownerId && outputNodeIds.has(ownerId)) {
+        outputColumnIds.add(col.id);
+      }
+    }
+  }
+
+  return { outputNodeIds, outputColumnIds };
 }

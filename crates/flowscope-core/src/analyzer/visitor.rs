@@ -8,7 +8,7 @@ use super::context::StatementContext;
 use super::expression::ExpressionAnalyzer;
 use super::helpers::{
     alias_visibility_warning, find_cte_definition_span, find_derived_table_alias_span,
-    generate_node_id,
+    generate_statement_scoped_node_id,
 };
 use super::select_analyzer::SelectAnalyzer;
 use super::Analyzer;
@@ -546,7 +546,11 @@ impl<'a, 'b> Visitor for LineageVisitor<'a, 'b> {
                 let cte_name = cte.alias.name.to_string();
                 let cte_span = self.locate_cte_definition_span(&cte_name);
                 let cte_id = self.ctx.add_node(Node {
-                    id: generate_node_id("cte", &cte_name),
+                    id: generate_statement_scoped_node_id(
+                        "cte",
+                        self.ctx.statement_index,
+                        &cte_name,
+                    ),
                     node_type: NodeType::Cte,
                     label: cte_name.clone().into(),
                     qualified_name: Some(cte_name.clone().into()),
@@ -693,7 +697,11 @@ impl<'a, 'b> Visitor for LineageVisitor<'a, 'b> {
                 // This avoids introducing a separate NodeType for a very similar concept.
                 let derived_node_id = alias_name.as_ref().map(|name| {
                     self.ctx.add_node(Node {
-                        id: generate_node_id("derived", name),
+                        id: generate_statement_scoped_node_id(
+                            "derived",
+                            self.ctx.statement_index,
+                            name,
+                        ),
                         node_type: NodeType::Cte,
                         label: name.clone().into(),
                         qualified_name: Some(name.clone().into()),
