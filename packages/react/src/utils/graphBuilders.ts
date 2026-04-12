@@ -25,6 +25,10 @@ import {
   groupOutputColumns,
   resolveOutputMapping,
   edgePairKey,
+  syntheticEdgeId,
+  isNodeHighlighted,
+  createStatementScope,
+  withStatementScope,
 } from './lineageHelpers';
 
 const SELECT_STATEMENT_TYPES = new Set([
@@ -65,16 +69,18 @@ export function mergeStatements(statements: StatementLineage[]): StatementLineag
 
   statements.forEach((stmt) => {
     const sourceName = stmt.sourceName;
+    const statementScope = createStatementScope(stmt.statementIndex, sourceName);
     stmt.nodes.forEach((node) => {
       const existing = mergedNodes.get(node.id);
       if (!existing) {
-        const nodeWithSource = { ...node };
+        let nodeWithSource = { ...node };
         if (sourceName) {
           nodeWithSource.metadata = {
             ...node.metadata,
             sourceName,
           };
         }
+        nodeWithSource = withStatementScope(nodeWithSource, statementScope);
         mergedNodes.set(node.id, nodeWithSource);
         return;
       }
@@ -86,7 +92,7 @@ export function mergeStatements(statements: StatementLineage[]): StatementLineag
 
     stmt.edges.forEach((edge) => {
       if (!mergedEdges.has(edge.id)) {
-        mergedEdges.set(edge.id, edge);
+        mergedEdges.set(edge.id, withStatementScope(edge, statementScope));
       }
     });
   });
@@ -188,24 +194,6 @@ interface TableNodeBuilderOptions extends NodeBuilderOptions {
   hiddenColumnCount?: number;
   isRecursive?: boolean;
   isBaseTable?: boolean;
-}
-
-/**
- * Determine if a node should be highlighted based on search term.
- * Checks both node label and column names for matches.
- */
-function isNodeHighlighted(
-  searchTerm: string,
-  columns: ColumnNodeInfo[],
-  nodeLabel?: string
-): boolean {
-  if (!searchTerm) {
-    return false;
-  }
-  const lowerSearch = searchTerm.toLowerCase();
-  const labelMatch = !!nodeLabel && nodeLabel.toLowerCase().includes(lowerSearch);
-  const columnMatch = columns.some((col) => col.name.toLowerCase().includes(lowerSearch));
-  return labelMatch || columnMatch;
 }
 
 /**
@@ -383,6 +371,7 @@ export function buildFlowNodes(
     statement.edges,
     columnNodes,
     ownedColumnIds,
+    isSelect,
     GRAPH_CONFIG.VIRTUAL_OUTPUT_NODE_ID
   );
 
@@ -471,7 +460,6 @@ export function buildFlowEdges(
   const tableNodes = statement.nodes.filter((n) => isTableLikeType(n.type));
   const columnNodes = statement.nodes.filter((n) => n.type === 'column');
   const outputNodes = statement.nodes.filter((n) => n.type === OUTPUT_NODE_TYPE);
-  const explicitOutputNodeIds = new Set(outputNodes.map((node) => node.id));
   const isSelect = isSelectStatement(statement);
 
   // Build table ID -> Node map for join type lookup
@@ -485,7 +473,7 @@ export function buildFlowEdges(
 
   const { outputNodeIds, outputColumnIds } = resolveOutputMapping(
     statement.edges,
-    explicitOutputNodeIds,
+    outputNodes,
     columnNodes,
     columnToTableMap,
     isSelect,
@@ -527,7 +515,7 @@ export function buildFlowEdges(
       const uiEdgeType = edgeType === JOIN_DEPENDENCY_EDGE_TYPE ? 'joinDependency' : edgeType;
 
       flowEdges.push({
-        id: `edge_${sourceTableId}_to_${targetTableId}`,
+        id: syntheticEdgeId('relation', sourceTableId, targetTableId),
         source: sourceTableId,
         target: targetTableId,
         type: 'animated',
@@ -667,7 +655,7 @@ export function buildFlowEdges(
           const joinType = formatJoinType(edge.joinType);
 
           flowEdges.push({
-            id: `edge_${sourceTableId}_to_${targetTableId}`,
+            id: syntheticEdgeId('relation', sourceTableId, targetTableId),
             source: sourceTableId,
             target: targetTableId,
             type: 'animated',
@@ -699,7 +687,7 @@ export function buildFlowEdges(
             const joinType = formatJoinType(edge.joinType);
 
             flowEdges.push({
-              id: `edge_${resolvedSourceId}_to_${resolvedTargetId}`,
+              id: syntheticEdgeId('relation', resolvedSourceId, resolvedTargetId),
               source: resolvedSourceId,
               target: resolvedTargetId,
               type: 'animated',
@@ -755,7 +743,7 @@ export function buildFlowEdges(
       const label = formatJoinType(joinType);
 
       flowEdges.push({
-        id: `edge_${sourceId}_to_${targetId}`,
+        id: syntheticEdgeId('select-output', sourceId, targetId),
         source: sourceId,
         target: targetId,
         type: 'animated',
@@ -784,6 +772,12 @@ function getScriptIO(stmts: StatementLineageWithSource[]) {
   stmts.forEach((stmt) => {
     const createdRelationIds = getCreatedRelationNodeIds(stmt);
     stmt.nodes.forEach((node) => {
+      if (node.type === OUTPUT_NODE_TYPE) {
+        writes.add(node.label);
+        writeQualified.add(node.qualifiedName || node.label);
+        return;
+      }
+
       if (node.type === 'table' || node.type === 'view') {
         const isWritten =
           stmt.edges.some((e) => e.to === node.id && e.type === 'data_flow') ||
@@ -876,6 +870,12 @@ function buildHybridGraph(
     stmts.forEach((stmt) => {
       const createdRelationIds = getCreatedRelationNodeIds(stmt);
       stmt.nodes.forEach((node) => {
+        if (node.type === OUTPUT_NODE_TYPE) {
+          const qName = node.qualifiedName || node.label;
+          uniqueTables.set(qName, { label: node.label, sourceName: stmt.sourceName });
+          return;
+        }
+
         if (node.type === 'table' || node.type === 'view') {
           const qName = node.qualifiedName || node.label;
           const isWritten =

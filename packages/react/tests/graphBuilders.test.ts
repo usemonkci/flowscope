@@ -5,6 +5,7 @@ import {
   buildFlowNodes,
   mergeStatements,
   computeIsCollapsed,
+  buildScriptLevelGraph,
 } from '../src/utils/graphBuilders';
 import { GRAPH_CONFIG } from '../src/constants';
 
@@ -702,6 +703,149 @@ describe('graphBuilders DML handling', () => {
     expect(cteNodes).toHaveLength(2);
   });
 
+  it('preserves virtual output fallback when merged with an explicit-output statement', () => {
+    const explicitStmt: StatementLineage = {
+      statementIndex: 0,
+      statementType: 'SELECT',
+      joinCount: 0,
+      complexityScore: 1,
+      sourceName: 'models/explicit.sql',
+      nodes: [
+        { id: 'output:explicit', type: 'output', label: 'explicit_output' },
+        {
+          id: 'table:explicit_source',
+          type: 'table',
+          label: 'explicit_source',
+          qualifiedName: 'explicit_source',
+        },
+        {
+          id: 'column:explicit_source.id',
+          type: 'column',
+          label: 'id',
+          qualifiedName: 'explicit_source.id',
+        },
+        {
+          id: 'column:explicit.output_id',
+          type: 'column',
+          label: 'id',
+        },
+      ],
+      edges: [
+        {
+          id: 'own:explicit:source',
+          from: 'table:explicit_source',
+          to: 'column:explicit_source.id',
+          type: 'ownership',
+        },
+        {
+          id: 'own:explicit:output',
+          from: 'output:explicit',
+          to: 'column:explicit.output_id',
+          type: 'ownership',
+        },
+        {
+          id: 'flow:explicit',
+          from: 'column:explicit_source.id',
+          to: 'column:explicit.output_id',
+          type: 'data_flow',
+        },
+      ],
+    };
+
+    const fallbackStmt: StatementLineage = {
+      statementIndex: 1,
+      statementType: 'SELECT',
+      joinCount: 0,
+      complexityScore: 1,
+      sourceName: 'models/fallback.sql',
+      nodes: [
+        {
+          id: 'table:fallback_source',
+          type: 'table',
+          label: 'fallback_source',
+          qualifiedName: 'fallback_source',
+        },
+        {
+          id: 'column:fallback_source.id',
+          type: 'column',
+          label: 'id',
+          qualifiedName: 'fallback_source.id',
+        },
+        {
+          id: 'column:fallback.output_id',
+          type: 'column',
+          label: 'id',
+        },
+      ],
+      edges: [
+        {
+          id: 'own:fallback:source',
+          from: 'table:fallback_source',
+          to: 'column:fallback_source.id',
+          type: 'ownership',
+        },
+        {
+          id: 'flow:fallback',
+          from: 'column:fallback_source.id',
+          to: 'column:fallback.output_id',
+          type: 'data_flow',
+        },
+      ],
+    };
+
+    const merged = mergeStatements([explicitStmt, fallbackStmt]);
+    const nodes = buildFlowNodes(merged, null, '', new Set<string>(), new Set<string>());
+    const edges = buildFlowEdges(merged);
+
+    expect(nodes.find((node) => node.id === 'output:explicit')).toBeDefined();
+    expect(nodes.find((node) => node.id === GRAPH_CONFIG.VIRTUAL_OUTPUT_NODE_ID)).toBeDefined();
+    expect(
+      edges.find(
+        (edge) =>
+          edge.source === 'table:fallback_source' &&
+          edge.target === GRAPH_CONFIG.VIRTUAL_OUTPUT_NODE_ID
+      )
+    ).toBeDefined();
+  });
+
+  it('does not create a virtual output node when an explicit output node lacks ownership edges', () => {
+    const statement: StatementLineage = {
+      statementIndex: 0,
+      statementType: 'SELECT',
+      joinCount: 0,
+      complexityScore: 1,
+      nodes: [
+        { id: 'output:legacy', type: 'output', label: 'legacy_output' },
+        { id: 'table:source', type: 'table', label: 'source', qualifiedName: 'source' },
+        { id: 'column:source.id', type: 'column', label: 'id', qualifiedName: 'source.id' },
+        { id: 'column:output.id', type: 'column', label: 'id' },
+      ],
+      edges: [
+        {
+          id: 'own:source:id',
+          from: 'table:source',
+          to: 'column:source.id',
+          type: 'ownership',
+        },
+        {
+          id: 'flow:source:output',
+          from: 'column:source.id',
+          to: 'column:output.id',
+          type: 'data_flow',
+        },
+      ],
+    };
+
+    const nodes = buildFlowNodes(statement, null, '', new Set<string>(), new Set<string>());
+    const edges = buildFlowEdges(statement);
+
+    expect(nodes.find((node) => node.id === 'output:legacy')).toBeDefined();
+    expect(nodes.find((node) => node.id === GRAPH_CONFIG.VIRTUAL_OUTPUT_NODE_ID)).toBeUndefined();
+    expect(
+      edges.find((edge) => edge.target === GRAPH_CONFIG.VIRTUAL_OUTPUT_NODE_ID)
+    ).toBeUndefined();
+  });
+
   it('only marks physical tables as base tables when joins exist', () => {
     const statement: StatementLineage = {
       statementIndex: 0,
@@ -768,5 +912,116 @@ describe('graphBuilders DML handling', () => {
     expect(ordersNode?.data.isBaseTable).toBe(false);
     expect(recentOrdersNode?.data.isBaseTable).toBeFalsy();
     expect(viewNode?.data.isBaseTable).toBeFalsy();
+  });
+
+  it('emits distinct synthetic edge ids for distinct relation pairs containing _to_', () => {
+    const statement: StatementLineage = {
+      statementIndex: 0,
+      statementType: 'INSERT',
+      joinCount: 0,
+      complexityScore: 1,
+      nodes: [
+        { id: 'table:a', type: 'table', label: 'a', qualifiedName: 'a' },
+        { id: 'table:b_to_c', type: 'table', label: 'b_to_c', qualifiedName: 'b_to_c' },
+        { id: 'table:a_to_b', type: 'table', label: 'a_to_b', qualifiedName: 'a_to_b' },
+        { id: 'table:c', type: 'table', label: 'c', qualifiedName: 'c' },
+        { id: 'column:a.id', type: 'column', label: 'id', qualifiedName: 'a.id' },
+        {
+          id: 'column:b_to_c.id',
+          type: 'column',
+          label: 'id',
+          qualifiedName: 'b_to_c.id',
+        },
+        {
+          id: 'column:a_to_b.id',
+          type: 'column',
+          label: 'id',
+          qualifiedName: 'a_to_b.id',
+        },
+        { id: 'column:c.id', type: 'column', label: 'id', qualifiedName: 'c.id' },
+      ],
+      edges: [
+        { id: 'own:a', from: 'table:a', to: 'column:a.id', type: 'ownership' },
+        {
+          id: 'own:b_to_c',
+          from: 'table:b_to_c',
+          to: 'column:b_to_c.id',
+          type: 'ownership',
+        },
+        {
+          id: 'own:a_to_b',
+          from: 'table:a_to_b',
+          to: 'column:a_to_b.id',
+          type: 'ownership',
+        },
+        { id: 'own:c', from: 'table:c', to: 'column:c.id', type: 'ownership' },
+        {
+          id: 'flow:a:b_to_c',
+          from: 'column:a.id',
+          to: 'column:b_to_c.id',
+          type: 'data_flow',
+        },
+        {
+          id: 'flow:a_to_b:c',
+          from: 'column:a_to_b.id',
+          to: 'column:c.id',
+          type: 'data_flow',
+        },
+      ],
+    };
+
+    const edges = buildFlowEdges(statement);
+    const edgeIds = edges.map((edge) => edge.id);
+
+    expect(edges).toHaveLength(2);
+    expect(new Set(edgeIds).size).toBe(2);
+    expect(edges.map((edge) => `${edge.source}->${edge.target}`).sort()).toEqual([
+      'table:a->table:b_to_c',
+      'table:a_to_b->table:c',
+    ]);
+  });
+
+  it('includes explicit output nodes as written relations in script graph mode', () => {
+    const statements: StatementLineage[] = [
+      {
+        statementIndex: 0,
+        statementType: 'WITH',
+        sourceName: 'scratchpad.sql',
+        joinCount: 0,
+        complexityScore: 1,
+        nodes: [
+          {
+            id: 'output:scratchpad',
+            type: 'output',
+            label: 'scratchpad',
+            qualifiedName: 'scratchpad',
+          },
+          {
+            id: 'table:raw_orders',
+            type: 'table',
+            label: 'raw_orders',
+            qualifiedName: 'jaffle_shop.raw_orders',
+          },
+        ],
+        edges: [],
+      },
+    ];
+
+    const { nodes, edges } = buildScriptLevelGraph(statements, null, '', true);
+
+    expect(nodes.find((node) => node.id === 'table:scratchpad')).toBeDefined();
+    expect(
+      edges.find(
+        (edge) =>
+          edge.source === 'script:scratchpad.sql' && edge.target === 'table:scratchpad'
+      )
+    ).toBeDefined();
+    expect(
+      edges.find(
+        (edge) =>
+          edge.source === 'table:jaffle_shop.raw_orders' &&
+          edge.target === 'script:scratchpad.sql'
+      )
+    ).toBeDefined();
   });
 });

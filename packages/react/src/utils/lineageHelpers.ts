@@ -9,6 +9,9 @@ export const OUTPUT_NODE_TYPE = 'output' as Node['type'];
 /** Edge type constant for join dependency edges. */
 export const JOIN_DEPENDENCY_EDGE_TYPE = 'join_dependency' as Edge['type'];
 
+const DEFAULT_STATEMENT_SCOPE = 'statement:0';
+const STATEMENT_SCOPE_METADATA_KEY = 'statementScope';
+
 /**
  * Returns the node ids for relations created by a statement (e.g. CREATE TABLE/VIEW).
  * For CREATE statements we prefer nodes that receive data_flow edges; when lineage
@@ -70,7 +73,7 @@ export function getOutputColumnIds(
       }
     }
   }
-  if (isSelect && ids.size === 0) {
+  if (isSelect && !outputNode && ids.size === 0) {
     for (const col of columnNodes) {
       if (!columnToTableMap.has(col.id)) {
         ids.add(col.id);
@@ -162,6 +165,24 @@ export function formatJoinType(joinType: string | undefined | null): string | un
   return JOIN_TYPE_LABELS[joinType] || joinType.replace(/_/g, ' ');
 }
 
+/**
+ * Determine if a node should be highlighted based on search term.
+ * Checks both node label and column names for matches.
+ */
+export function isNodeHighlighted(
+  searchTerm: string,
+  columns: { name: string }[],
+  nodeLabel?: string
+): boolean {
+  if (!searchTerm) {
+    return false;
+  }
+  const lowerSearch = searchTerm.toLowerCase();
+  const labelMatch = !!nodeLabel && nodeLabel.toLowerCase().includes(lowerSearch);
+  const columnMatch = columns.some((col) => col.name.toLowerCase().includes(lowerSearch));
+  return labelMatch || columnMatch;
+}
+
 /** Minimal column info returned by output column grouping. */
 export interface OutputColumnInfo {
   id: string;
@@ -173,9 +194,113 @@ export interface OutputColumnInfo {
 /**
  * Create a collision-safe key for a directed pair of node IDs.
  * Uses a null separator so IDs containing any printable substring cannot collide.
+ *
+ * Node IDs must not contain null bytes; this is validated in development builds.
  */
 export function edgePairKey(sourceId: string, targetId: string): string {
+  if (process.env.NODE_ENV !== 'production') {
+    if (sourceId.includes('\0') || targetId.includes('\0')) {
+      throw new Error('Node IDs must not contain null bytes');
+    }
+  }
   return `${sourceId}\0${targetId}`;
+}
+
+/**
+ * Create a collision-safe React Flow edge ID for synthetic relation-level edges.
+ */
+export function syntheticEdgeId(kind: string, sourceId: string, targetId: string): string {
+  return ['edge', kind, sourceId, targetId].map((part) => encodeURIComponent(part)).join('/');
+}
+
+/**
+ * Create a stable per-statement scope key that survives statement merging.
+ */
+export function createStatementScope(statementIndex: number, sourceName?: string): string {
+  return sourceName ? `${sourceName}#${statementIndex}` : `statement:${statementIndex}`;
+}
+
+/**
+ * Attach merged-statement scope metadata to a node or edge.
+ */
+export function withStatementScope<T extends Node | Edge>(entity: T, scope: string): T {
+  if (entity.metadata?.[STATEMENT_SCOPE_METADATA_KEY] === scope) {
+    return entity;
+  }
+
+  return {
+    ...entity,
+    metadata: {
+      ...(entity.metadata || {}),
+      [STATEMENT_SCOPE_METADATA_KEY]: scope,
+    },
+  };
+}
+
+function getStatementScope(entity: Pick<Node, 'metadata'> | Pick<Edge, 'metadata'>): string {
+  const scope = entity.metadata?.[STATEMENT_SCOPE_METADATA_KEY];
+  return typeof scope === 'string' ? scope : DEFAULT_STATEMENT_SCOPE;
+}
+
+interface ResolvedOutputOwnership {
+  columnToOutputNodeMap: Map<string, string>;
+  outputNodeIds: Set<string>;
+  outputColumnIds: Set<string>;
+}
+
+function resolveOutputOwnership(
+  outputNodes: Node[],
+  edges: Edge[],
+  columnNodes: Node[],
+  relationOwnedColumnIds: Set<string>,
+  isSelect: boolean,
+  virtualOutputNodeId: string
+): ResolvedOutputOwnership {
+  const explicitOutputNodeIds = new Set(outputNodes.map((node) => node.id));
+  const explicitOutputScopes = new Set(outputNodes.map((node) => getStatementScope(node)));
+  const explicitOwnerIds = new Map<string, string>();
+  const columnToOutputNodeMap = new Map<string, string>();
+
+  for (const edge of edges) {
+    if (edge.type === 'ownership' && explicitOutputNodeIds.has(edge.from)) {
+      explicitOwnerIds.set(edge.to, edge.from);
+    }
+  }
+
+  for (const col of columnNodes) {
+    const explicitOwnerId = explicitOwnerIds.get(col.id);
+    if (explicitOwnerId) {
+      columnToOutputNodeMap.set(col.id, explicitOwnerId);
+      continue;
+    }
+
+    if (!isSelect || col.qualifiedName || relationOwnedColumnIds.has(col.id)) {
+      continue;
+    }
+
+    if (explicitOutputScopes.has(getStatementScope(col))) {
+      continue;
+    }
+
+    columnToOutputNodeMap.set(col.id, virtualOutputNodeId);
+  }
+
+  const outputNodeIds = new Set(explicitOutputNodeIds);
+  const outputColumnIds = new Set<string>();
+
+  for (const col of columnNodes) {
+    const outputOwnerId = columnToOutputNodeMap.get(col.id);
+    if (!outputOwnerId) {
+      continue;
+    }
+
+    outputColumnIds.add(col.id);
+    if (outputOwnerId === virtualOutputNodeId) {
+      outputNodeIds.add(virtualOutputNodeId);
+    }
+  }
+
+  return { columnToOutputNodeMap, outputNodeIds, outputColumnIds };
 }
 
 /**
@@ -190,34 +315,34 @@ export function groupOutputColumns(
   edges: Edge[],
   columnNodes: Node[],
   ownedColumnIds: Set<string>,
+  isSelect: boolean,
   virtualOutputNodeId: string
 ): Map<string, OutputColumnInfo[]> {
   const result = new Map<string, OutputColumnInfo[]>();
-  const explicitIds = new Set(outputNodes.map((n) => n.id));
-  const ownerIds = new Map<string, string>();
-
-  for (const edge of edges) {
-    if (edge.type === 'ownership' && explicitIds.has(edge.from)) {
-      ownerIds.set(edge.to, edge.from);
-    }
-  }
+  const { columnToOutputNodeMap } = resolveOutputOwnership(
+    outputNodes,
+    edges,
+    columnNodes,
+    ownedColumnIds,
+    isSelect,
+    virtualOutputNodeId
+  );
 
   for (const col of columnNodes) {
-    const explicitOwner = ownerIds.get(col.id);
-    const outputOwnerId =
-      explicitOwner ??
-      (!col.qualifiedName && !ownedColumnIds.has(col.id) ? virtualOutputNodeId : undefined);
-
+    const outputOwnerId = columnToOutputNodeMap.get(col.id);
     if (!outputOwnerId) continue;
 
-    const columns = result.get(outputOwnerId) || [];
+    let columns = result.get(outputOwnerId);
+    if (!columns) {
+      columns = [];
+      result.set(outputOwnerId, columns);
+    }
     columns.push({
       id: col.id,
       name: col.label,
       expression: col.expression,
       aggregation: col.aggregation,
     });
-    result.set(outputOwnerId, columns);
   }
 
   return result;
@@ -231,42 +356,24 @@ export function groupOutputColumns(
  */
 export function resolveOutputMapping(
   edges: Edge[],
-  explicitOutputNodeIds: Set<string>,
+  outputNodes: Node[],
   columnNodes: Node[],
   columnToTableMap: Map<string, string>,
   isSelect: boolean,
   virtualOutputNodeId: string
 ): { outputNodeIds: Set<string>; outputColumnIds: Set<string> } {
-  for (const edge of edges) {
-    if (edge.type === 'ownership' && explicitOutputNodeIds.has(edge.from)) {
-      columnToTableMap.set(edge.to, edge.from);
-    }
-  }
+  const relationOwnedColumnIds = new Set(columnToTableMap.keys());
+  const { columnToOutputNodeMap, outputNodeIds, outputColumnIds } = resolveOutputOwnership(
+    outputNodes,
+    edges,
+    columnNodes,
+    relationOwnedColumnIds,
+    isSelect,
+    virtualOutputNodeId
+  );
 
-  if (isSelect) {
-    for (const col of columnNodes) {
-      if (!columnToTableMap.has(col.id)) {
-        columnToTableMap.set(col.id, virtualOutputNodeId);
-      }
-    }
-  }
-
-  const outputNodeIds = new Set(explicitOutputNodeIds);
-  if (
-    isSelect &&
-    columnNodes.some((col) => columnToTableMap.get(col.id) === virtualOutputNodeId)
-  ) {
-    outputNodeIds.add(virtualOutputNodeId);
-  }
-
-  const outputColumnIds = new Set<string>();
-  if (isSelect) {
-    for (const col of columnNodes) {
-      const ownerId = columnToTableMap.get(col.id);
-      if (ownerId && outputNodeIds.has(ownerId)) {
-        outputColumnIds.add(col.id);
-      }
-    }
+  for (const [columnId, outputNodeId] of columnToOutputNodeMap) {
+    columnToTableMap.set(columnId, outputNodeId);
   }
 
   return { outputNodeIds, outputColumnIds };
