@@ -419,20 +419,19 @@ impl<'a> Analyzer<'a> {
     pub(super) fn analyze_insert(&mut self, ctx: &mut StatementContext, insert: &ast::Insert) {
         let target_name = insert.table.to_string();
         let canonical = self.normalize_table_name(&target_name);
+        let target_label = extract_simple_name(&target_name);
 
         // Create target table node
         let target_id = ctx.add_node(Node {
             id: generate_node_id("table", &canonical),
             node_type: NodeType::Table,
-            label: extract_simple_name(&target_name).into(),
+            label: target_label.clone().into(),
             qualified_name: Some(canonical.clone().into()),
-            expression: None,
-            span: None,
-            metadata: None,
-            resolution_source: None,
-            filters: Vec::new(),
-            aggregation: None,
+            ..Default::default()
         });
+        if let Some(span) = self.locate_relation_name_span(ctx, &target_name) {
+            ctx.add_name_span(&target_id, span);
+        }
 
         self.tracker
             .record_produced(&canonical, ctx.statement_index);
@@ -691,19 +690,18 @@ impl<'a> Analyzer<'a> {
                 let name = table_name.to_string();
                 let canonical = self.normalize_table_name(&name);
                 let node_id = generate_node_id("table", &canonical);
+                let label = extract_simple_name(&name);
 
                 ctx.add_node(Node {
-                    id: node_id,
+                    id: node_id.clone(),
                     node_type: NodeType::Table,
-                    label: extract_simple_name(&name).into(),
+                    label: label.clone().into(),
                     qualified_name: Some(canonical.clone().into()),
-                    expression: None,
-                    span: None,
-                    metadata: None,
-                    resolution_source: None,
-                    filters: Vec::new(),
-                    aggregation: None,
+                    ..Default::default()
                 });
+                if let Some(span) = self.locate_relation_name_span(ctx, &name) {
+                    ctx.add_name_span(&node_id, span);
+                }
 
                 if to {
                     // COPY table TO file: table is source (consumed)
@@ -742,19 +740,18 @@ impl<'a> Analyzer<'a> {
                 let name = into.to_string();
                 let canonical = self.normalize_table_name(&name);
                 let target_id = generate_node_id("table", &canonical);
+                let label = extract_simple_name(&name);
 
                 ctx.add_node(Node {
                     id: target_id.clone(),
                     node_type: NodeType::Table,
-                    label: extract_simple_name(&name).into(),
+                    label: label.clone().into(),
                     qualified_name: Some(canonical.clone().into()),
-                    expression: None,
-                    span: None,
-                    metadata: None,
-                    resolution_source: None,
-                    filters: Vec::new(),
-                    aggregation: None,
+                    ..Default::default()
                 });
+                if let Some(span) = self.locate_relation_name_span(ctx, &name) {
+                    ctx.add_name_span(&target_id, span);
+                }
 
                 self.tracker
                     .record_produced(&canonical, ctx.statement_index);
@@ -774,19 +771,18 @@ impl<'a> Analyzer<'a> {
                     let name = table_name.to_string();
                     let canonical = self.normalize_table_name(&name);
                     let node_id = generate_node_id("table", &canonical);
+                    let label = extract_simple_name(&name);
 
                     ctx.add_node(Node {
-                        id: node_id,
+                        id: node_id.clone(),
                         node_type: NodeType::Table,
-                        label: extract_simple_name(&name).into(),
+                        label: label.clone().into(),
                         qualified_name: Some(canonical.clone().into()),
-                        expression: None,
-                        span: None,
-                        metadata: None,
-                        resolution_source: None,
-                        filters: Vec::new(),
-                        aggregation: None,
+                        ..Default::default()
                     });
+                    if let Some(span) = self.locate_relation_name_span(ctx, &name) {
+                        ctx.add_name_span(&node_id, span);
+                    }
 
                     self.tracker
                         .record_consumed(&canonical, ctx.statement_index);
@@ -847,32 +843,30 @@ impl<'a> Analyzer<'a> {
         let new_node_id = generate_node_id("table", &new_canonical);
 
         // Create node for old table (source of rename)
+        let old_label = extract_simple_name(&old_name_str);
         ctx.add_node(Node {
             id: old_node_id.clone(),
             node_type: NodeType::Table,
-            label: extract_simple_name(&old_name_str).into(),
+            label: old_label.clone().into(),
             qualified_name: Some(old_canonical.clone().into()),
-            expression: None,
-            span: None,
-            metadata: None,
-            resolution_source: None,
-            filters: Vec::new(),
-            aggregation: None,
+            ..Default::default()
         });
+        if let Some(span) = self.locate_relation_name_span(ctx, &old_name_str) {
+            ctx.add_name_span(&old_node_id, span);
+        }
 
         // Create node for new table (target of rename)
+        let new_label = extract_simple_name(&new_name_str);
         ctx.add_node(Node {
             id: new_node_id.clone(),
             node_type: NodeType::Table,
-            label: extract_simple_name(&new_name_str).into(),
+            label: new_label.clone().into(),
             qualified_name: Some(new_canonical.clone().into()),
-            expression: None,
-            span: None,
-            metadata: None,
-            resolution_source: None,
-            filters: Vec::new(),
-            aggregation: None,
+            ..Default::default()
         });
+        if let Some(span) = self.locate_relation_name_span(ctx, &new_name_str) {
+            ctx.add_name_span(&new_node_id, span);
+        }
 
         // Create dataflow edge from old to new table
         let edge_id = generate_edge_id(&old_node_id, &new_node_id);

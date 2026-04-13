@@ -102,24 +102,35 @@ pub(crate) struct JoinInfo {
 ///   references get distinct instance nodes (see `resolve_cte_reference`).
 pub(crate) struct StatementContext {
     pub(crate) statement_index: usize,
+    /// Statement-local nodes.
+    ///
+    /// Read-only iteration is fine, but **structural mutations** (push/remove/
+    /// swap) must go through `add_node` / `remove_node_by_id` so `node_index`
+    /// stays in sync. In-place mutation of an existing node's fields is safe.
     pub(crate) nodes: Vec<Node>,
     pub(crate) edges: Vec<Edge>,
     pub(crate) node_ids: HashSet<Arc<str>>,
+    /// Fast lookup from node ID to index in `nodes`, kept in sync with
+    /// `add_node` / `remove_node_by_id`. Used by hot paths like
+    /// `add_name_span` to avoid O(n) linear scans per call.
+    node_index: HashMap<Arc<str>, usize>,
     pub(crate) edge_ids: HashSet<Arc<str>>,
     /// CTE name -> node ID
     pub(crate) cte_definitions: HashMap<String, Arc<str>>,
     /// Node ID -> CTE/derived alias name for reverse lookups
     pub(crate) cte_node_to_name: HashMap<Arc<str>, String>,
-    /// Cursor for sequential span searching across identifier definitions.
+    /// Cursor for sequential left-to-right searching of definition-like spans.
     ///
-    /// Used to locate spans for CTEs and derived table aliases by tracking the
-    /// current search position in the SQL text. Updated after each successful
-    /// span match to ensure subsequent searches find distinct occurrences.
-    ///
-    /// # Invariants
-    /// - Reset to 0 when entering a new statement context
-    /// - Assumes AST traversal is roughly left-to-right in lexical order
+    /// Used for CTE definition names and derived-table aliases, where the AST
+    /// visitor still relies on roughly lexical traversal order.
     pub(crate) span_search_cursor: usize,
+    /// Per-relation cursor for table/view/CTE occurrences keyed by the raw name
+    /// as written in the AST (`users`, `public.users`, `"my.schema"."t"`, etc.).
+    ///
+    /// This avoids coupling unrelated relations to a single global cursor, so a
+    /// mildly out-of-order traversal across different relations does not silently
+    /// mis-assign a later occurrence of the same name in release builds.
+    relation_span_cursors: HashMap<String, usize>,
     /// Alias -> canonical table name (global, for backwards compatibility)
     pub(crate) table_aliases: HashMap<String, String>,
     /// Subquery aliases (for reference tracking)
@@ -203,10 +214,12 @@ impl StatementContext {
             nodes: Vec::new(),
             edges: Vec::new(),
             node_ids: HashSet::new(),
+            node_index: HashMap::new(),
             edge_ids: HashSet::new(),
             cte_definitions: HashMap::new(),
             cte_node_to_name: HashMap::new(),
             span_search_cursor: 0,
+            relation_span_cursors: HashMap::new(),
             table_aliases: HashMap::new(),
             subquery_aliases: HashSet::new(),
             last_operation: None,
@@ -348,15 +361,56 @@ impl StatementContext {
     pub(crate) fn add_node(&mut self, node: Node) -> Arc<str> {
         let id = node.id.clone();
         if self.node_ids.insert(id.clone()) {
+            self.node_index.insert(id.clone(), self.nodes.len());
             self.nodes.push(node);
         }
         id
+    }
+
+    /// Remove a node (and its index entry) by ID in O(1).
+    pub(crate) fn remove_node_by_id(&mut self, node_id: &Arc<str>) {
+        let Some(idx) = self.node_index.remove(node_id) else {
+            return;
+        };
+        self.node_ids.remove(node_id);
+
+        let removed = self.nodes.swap_remove(idx);
+        debug_assert_eq!(&removed.id, node_id);
+
+        if idx < self.nodes.len() {
+            let moved_id = self.nodes[idx].id.clone();
+            self.node_index.insert(moved_id, idx);
+        }
     }
 
     pub(crate) fn add_edge(&mut self, edge: Edge) {
         let id = edge.id.clone();
         if self.edge_ids.insert(id) {
             self.edges.push(edge);
+        }
+    }
+
+    /// Returns a mutable node by ID using the maintained index.
+    pub(crate) fn node_mut(&mut self, node_id: &Arc<str>) -> Option<&mut Node> {
+        let &idx = self.node_index.get(node_id)?;
+        let node = self.nodes.get_mut(idx)?;
+        debug_assert_eq!(&node.id, node_id);
+        Some(node)
+    }
+
+    /// Returns the per-relation name-occurrence cursor for `raw_name`.
+    pub(crate) fn relation_span_cursor(&mut self, raw_name: &str) -> &mut usize {
+        self.relation_span_cursors
+            .entry(raw_name.to_string())
+            .or_insert(0)
+    }
+
+    /// Attach a relation-name occurrence span to an existing node.
+    pub(crate) fn add_name_span(&mut self, node_id: &Arc<str>, span: crate::types::Span) {
+        if let Some(node) = self.node_mut(node_id) {
+            if !node.name_spans.contains(&span) {
+                node.name_spans.push(span);
+            }
         }
     }
 
@@ -383,12 +437,7 @@ impl StatementContext {
             node_type: NodeType::Output,
             label: label.into(),
             qualified_name,
-            expression: None,
-            span: None,
-            metadata: None,
-            resolution_source: None,
-            filters: Vec::new(),
-            aggregation: None,
+            ..Default::default()
         };
 
         self.add_node(output_node);

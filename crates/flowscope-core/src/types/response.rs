@@ -151,6 +151,28 @@ pub struct Node {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub span: Option<Span>,
 
+    /// Source locations for this node's own relation-name occurrences.
+    ///
+    /// Ordered by lexical occurrence (left-to-right in the SQL text). Includes
+    /// the declaration plus relation occurrences we can associate with the
+    /// node (for example, a CTE name after `WITH` and each `FROM cte_name` /
+    /// `JOIN cte_name` usage). Self-joins intentionally produce distinct node
+    /// instances (one per lexical occurrence), each carrying its own
+    /// single-entry `name_spans`, so repeated table names map to the correct
+    /// node.
+    ///
+    /// Populated for table, view, and CTE nodes only. Column qualifier occurrences
+    /// are not yet included, so column nodes omit this field and callers should
+    /// fall back to `span` (use `Node::all_name_spans` for a unified view).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub name_spans: Vec<Span>,
+
+    /// For CTE nodes: the source location of the CTE body (the parenthesized
+    /// subquery after `AS`). Enables the UI to highlight the definition body
+    /// separately from the CTE name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body_span: Option<Span>,
+
     /// Extensible metadata for future use
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata: Option<HashMap<String, serde_json::Value>>,
@@ -169,6 +191,25 @@ pub struct Node {
     pub aggregation: Option<AggregationInfo>,
 }
 
+impl Default for Node {
+    fn default() -> Self {
+        Self {
+            id: Arc::from(""),
+            node_type: NodeType::default(),
+            label: Arc::from(""),
+            qualified_name: None,
+            expression: None,
+            span: None,
+            name_spans: Vec::new(),
+            body_span: None,
+            metadata: None,
+            resolution_source: None,
+            filters: Vec::new(),
+            aggregation: None,
+        }
+    }
+}
+
 impl Node {
     /// Create a new table node with required fields.
     pub fn table(id: impl Into<Arc<str>>, label: impl Into<Arc<str>>) -> Self {
@@ -176,13 +217,7 @@ impl Node {
             id: id.into(),
             node_type: NodeType::Table,
             label: label.into(),
-            qualified_name: None,
-            expression: None,
-            span: None,
-            metadata: None,
-            resolution_source: None,
-            filters: Vec::new(),
-            aggregation: None,
+            ..Default::default()
         }
     }
 
@@ -192,13 +227,7 @@ impl Node {
             id: id.into(),
             node_type: NodeType::Cte,
             label: label.into(),
-            qualified_name: None,
-            expression: None,
-            span: None,
-            metadata: None,
-            resolution_source: None,
-            filters: Vec::new(),
-            aggregation: None,
+            ..Default::default()
         }
     }
 
@@ -208,13 +237,20 @@ impl Node {
             id: id.into(),
             node_type: NodeType::Column,
             label: label.into(),
-            qualified_name: None,
-            expression: None,
-            span: None,
-            metadata: None,
-            resolution_source: None,
-            filters: Vec::new(),
-            aggregation: None,
+            ..Default::default()
+        }
+    }
+
+    /// Returns all name occurrence spans, falling back to `span` for node
+    /// types that don't populate `name_spans` (currently column nodes). This
+    /// lets callers treat the two fields uniformly without branching on
+    /// `node_type`.
+    #[must_use]
+    pub fn all_name_spans(&self) -> Vec<Span> {
+        if !self.name_spans.is_empty() {
+            self.name_spans.clone()
+        } else {
+            self.span.into_iter().collect()
         }
     }
 
@@ -430,10 +466,15 @@ pub struct AggregationInfo {
 }
 
 /// The type of a node in the lineage graph.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum NodeType {
-    /// A database table
+    /// A database table.
+    ///
+    /// This is also the `Default` variant used by `Node::default()`, so callers
+    /// using `Node { node_type: ..., ..Default::default() }` must explicitly set
+    /// `node_type` or they will silently get a table node.
+    #[default]
     Table,
     /// A database view (CREATE VIEW)
     View,
@@ -758,6 +799,8 @@ mod tests {
                     qualified_name: Some("public.users".to_string().into()),
                     expression: None,
                     span: None,
+                    name_spans: Vec::new(),
+                    body_span: None,
                     metadata: None,
                     resolution_source: None,
                     filters: Vec::new(),

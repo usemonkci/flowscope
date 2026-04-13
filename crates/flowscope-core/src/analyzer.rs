@@ -30,8 +30,11 @@ mod statements;
 mod transform;
 pub mod visitor;
 
+use context::StatementContext;
 use cross_statement::CrossStatementTracker;
-use helpers::{build_column_schemas_with_constraints, find_identifier_span};
+use helpers::{
+    build_column_schemas_with_constraints, find_identifier_span, find_relation_occurrence_spans,
+};
 use input::{collect_statements, StatementInput};
 use schema_registry::SchemaRegistry;
 
@@ -124,21 +127,113 @@ impl<'a> Analyzer<'a> {
         }
     }
 
+    /// Returns the current statement SQL slice plus its absolute offset.
+    fn current_sql_slice(&self, _caller: &'static str) -> Option<(&str, usize)> {
+        if let Some(source) = &self.current_statement_source {
+            return match source.sql.get(source.range.start..source.range.end) {
+                Some(slice) => Some((slice, source.range.start)),
+                None => {
+                    #[cfg(feature = "tracing")]
+                    tracing::warn!(
+                        caller = _caller,
+                        start = source.range.start,
+                        end = source.range.end,
+                        sql_len = source.sql.len(),
+                        "current statement source range is invalid"
+                    );
+                    None
+                }
+            };
+        }
+
+        Some((self.request.sql.as_str(), 0))
+    }
+
     /// Finds the span of an identifier in the SQL text.
     ///
     /// This is used to attach source locations to issues for better error reporting.
     pub(crate) fn find_span(&self, identifier: &str) -> Option<Span> {
-        if let Some(source) = &self.current_statement_source {
-            let statement_sql = &source.sql[source.range.clone()];
-            return find_identifier_span(statement_sql, identifier, 0).map(|span| {
-                Span::new(
-                    source.range.start + span.start,
-                    source.range.start + span.end,
-                )
-            });
-        }
+        let (sql, offset) = self.current_sql_slice("find_span")?;
+        find_identifier_span(sql, identifier, 0)
+            .map(|span| Span::new(offset + span.start, offset + span.end))
+    }
 
-        find_identifier_span(&self.request.sql, identifier, 0)
+    /// Locates the next identifier span inside the current statement using the
+    /// statement-local search cursor stored on `ctx`.
+    ///
+    /// # Traversal-order contract
+    ///
+    /// Callers must invoke this in roughly left-to-right lexical order within a
+    /// single statement. Each successful call advances `ctx.span_search_cursor`
+    /// past the matched span, so a caller that processes AST nodes out of text
+    /// order will either skip matches or associate them with the wrong node
+    /// instance (notably for self-joins and repeated names). The
+    /// `debug_assert!` below catches backward movement in debug builds; it is
+    /// intentionally silent in release so a mildly-out-of-order visitor does
+    /// not panic in production — but callers should still treat left-to-right
+    /// traversal as an invariant.
+    pub(crate) fn locate_statement_span<F>(
+        &self,
+        ctx: &mut StatementContext,
+        identifier: &str,
+        finder: F,
+    ) -> Option<Span>
+    where
+        F: Fn(&str, &str, usize) -> Option<Span>,
+    {
+        let search_start = ctx.span_search_cursor;
+
+        let (sql, offset) = self.current_sql_slice("locate_statement_span")?;
+
+        let span = if let Some(span) = finder(sql, identifier, search_start) {
+            span
+        } else {
+            if search_start > 0 {
+                if let Some(earlier) = finder(sql, identifier, 0) {
+                    if earlier.end <= search_start {
+                        #[cfg(feature = "tracing")]
+                        tracing::warn!(
+                            identifier,
+                            search_start,
+                            earlier_start = earlier.start,
+                            earlier_end = earlier.end,
+                            "locate_statement_span exhausted its cursor before matching; traversal may be out of lexical order"
+                        );
+                    }
+                }
+            }
+            return None;
+        };
+        debug_assert!(
+            span.end >= ctx.span_search_cursor,
+            "Span cursor moved backward: {} -> {} (identifier: '{}')",
+            ctx.span_search_cursor,
+            span.end,
+            identifier
+        );
+
+        ctx.span_search_cursor = span.end;
+        Some(Span::new(offset + span.start, offset + span.end))
+    }
+
+    /// Locates the next occurrence of a relation name and narrows the match to
+    /// the node label token (the final identifier component).
+    ///
+    /// For example, `public.users` maps to the span of `users`, not the whole
+    /// qualified path. This preserves the existing `nameSpans` semantics while
+    /// still assigning occurrences per node instance in lexical order.
+    pub(crate) fn locate_relation_name_span(
+        &self,
+        ctx: &mut StatementContext,
+        raw_name: &str,
+    ) -> Option<Span> {
+        let search_start = *ctx.relation_span_cursor(raw_name);
+
+        let (sql, offset) = self.current_sql_slice("locate_relation_name_span")?;
+
+        let (full_span, name_span) = find_relation_occurrence_spans(sql, raw_name, search_start)?;
+        *ctx.relation_span_cursor(raw_name) = full_span.end;
+        Some(Span::new(offset + name_span.start, offset + name_span.end))
     }
 
     /// Returns the correct node ID and type for a relation (view vs table).

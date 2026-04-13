@@ -1,5 +1,6 @@
 ---
 source: crates/flowscope-core/tests/snapshots.rs
+assertion_line: 278
 expression: clean_result
 ---
 {
@@ -27,13 +28,25 @@ expression: clean_result
           "id": "table_14fd3f715fc3ae74",
           "type": "table",
           "label": "B",
-          "qualifiedName": "B"
+          "qualifiedName": "B",
+          "nameSpans": [
+            {
+              "start": 130,
+              "end": 131
+            }
+          ]
         },
         {
           "id": "table_dd4853e04f0abbb5",
           "type": "table",
           "label": "A",
-          "qualifiedName": "A"
+          "qualifiedName": "A",
+          "nameSpans": [
+            {
+              "start": 109,
+              "end": 110
+            }
+          ]
         }
       ],
       "edges": [

@@ -10043,3 +10043,297 @@ fn test_schema_type_normalization() {
         "bool should normalize to BOOLEAN"
     );
 }
+
+#[test]
+fn name_spans_single_table_reference() {
+    let sql = "SELECT * FROM users WHERE id = 1";
+    let result = run_analysis(sql, Dialect::Postgres, None);
+    let stmt = &result.statements[0];
+    let users = find_table_node(stmt, "users").expect("users table node");
+
+    assert_eq!(users.name_spans.len(), 1);
+    let span = users.name_spans[0];
+    assert_eq!(&sql[span.start..span.end], "users");
+    assert!(users.body_span.is_none());
+}
+
+#[test]
+fn name_spans_multiple_table_references() {
+    let sql = "SELECT u.id FROM users u WHERE u.id IN (SELECT id FROM users)";
+    let result = run_analysis(sql, Dialect::Postgres, None);
+    let stmt = &result.statements[0];
+    let users = find_table_node(stmt, "users").expect("users table node");
+
+    assert_eq!(
+        users.name_spans.len(),
+        2,
+        "expected both `users` references"
+    );
+    for span in &users.name_spans {
+        assert_eq!(&sql[span.start..span.end], "users");
+    }
+}
+
+#[test]
+fn name_spans_cte_with_body_and_references() {
+    let sql = "WITH active AS (SELECT id FROM users WHERE active) \
+               SELECT a.id FROM active a JOIN active b ON a.id = b.id";
+    let result = run_analysis(sql, Dialect::Postgres, None);
+    let stmt = &result.statements[0];
+    let active_nodes: Vec<_> = stmt
+        .nodes
+        .iter()
+        .filter(|node| {
+            node.node_type == NodeType::Cte && node.qualified_name.as_deref() == Some("active")
+        })
+        .collect();
+
+    assert!(
+        !active_nodes.is_empty(),
+        "expected at least one CTE node for `active`"
+    );
+
+    let total_spans: Vec<_> = active_nodes
+        .iter()
+        .flat_map(|node| node.name_spans.iter().copied())
+        .collect();
+    assert_eq!(
+        total_spans.len(),
+        3,
+        "expected declaration plus two relation occurrences across CTE instances"
+    );
+    for span in &total_spans {
+        assert_eq!(&sql[span.start..span.end], "active");
+    }
+
+    let cte_definition = active_nodes
+        .iter()
+        .find(|node| node.body_span.is_some())
+        .expect("cte definition node should retain body span");
+    let body = cte_definition
+        .body_span
+        .expect("cte body span should be populated");
+    let body_text = &sql[body.start..body.end];
+    assert!(body_text.starts_with('(') && body_text.ends_with(')'));
+    assert!(body_text.contains("SELECT id FROM users WHERE active"));
+}
+
+#[test]
+fn name_spans_ignores_matches_in_strings_and_comments() {
+    let sql = "-- users\nSELECT * FROM users WHERE note = 'see users'";
+    let result = run_analysis(sql, Dialect::Postgres, None);
+    let stmt = &result.statements[0];
+    let users = find_table_node(stmt, "users").expect("users table node");
+
+    assert_eq!(
+        users.name_spans.len(),
+        1,
+        "matches inside comments/strings must not count"
+    );
+    let span = users.name_spans[0];
+    assert_eq!(&sql[span.start..span.end], "users");
+}
+
+#[test]
+fn name_spans_skip_string_literals_before_relation_occurrence() {
+    let sql = "SELECT 'users' AS label FROM users";
+    let result = run_analysis(sql, Dialect::Postgres, None);
+    let stmt = &result.statements[0];
+    let users = find_table_node(stmt, "users").expect("users table node");
+
+    assert_eq!(users.name_spans.len(), 1);
+    let span = users.name_spans[0];
+    assert_eq!(&sql[span.start..span.end], "users");
+    assert_eq!(
+        span.start, 29,
+        "should bind to FROM users, not the string literal"
+    );
+}
+
+#[test]
+fn name_spans_skip_hash_comments_in_mysql() {
+    let sql = "SELECT 1 # users\nFROM users";
+    let result = run_analysis(sql, Dialect::Mysql, None);
+    let stmt = &result.statements[0];
+    let users = find_table_node(stmt, "users").expect("users table node");
+
+    assert_eq!(users.name_spans.len(), 1);
+    let span = users.name_spans[0];
+    assert_eq!(&sql[span.start..span.end], "users");
+    assert_eq!(
+        span.start, 22,
+        "should bind to FROM users, not the hash comment"
+    );
+}
+
+#[test]
+fn name_spans_skip_dollar_quoted_string_literals() {
+    let sql = "SELECT $$users$$ AS x FROM users";
+    let result = run_analysis(sql, Dialect::Postgres, None);
+    let stmt = &result.statements[0];
+    let users = find_table_node(stmt, "users").expect("users table node");
+
+    assert_eq!(users.name_spans.len(), 1);
+    let span = users.name_spans[0];
+    assert_eq!(&sql[span.start..span.end], "users");
+    assert_eq!(
+        span.start, 27,
+        "should bind to FROM users, not the dollar-quoted literal"
+    );
+}
+
+#[test]
+fn name_spans_empty_on_column_nodes() {
+    // Columns intentionally get empty name_spans in this release — accurate
+    // per-occurrence column spans require alias/scope resolution.
+    let sql = "SELECT id FROM users";
+    let result = run_analysis(sql, Dialect::Postgres, None);
+    let stmt = &result.statements[0];
+    let id_col = find_column_node(stmt, "id").expect("id column node");
+
+    assert!(
+        id_col.name_spans.is_empty(),
+        "column nodes should not populate name_spans in this release"
+    );
+}
+
+#[test]
+fn name_spans_recursive_cte_include_recursive_reference() {
+    let sql = concat!(
+        "WITH RECURSIVE org AS (",
+        "SELECT id FROM employees ",
+        "UNION ALL ",
+        "SELECT e.id FROM employees e JOIN org ON e.manager_id = org.id",
+        ") SELECT * FROM org"
+    );
+    let result = run_analysis(sql, Dialect::Postgres, None);
+    let stmt = &result.statements[0];
+    let org = find_cte_node(stmt, "org").expect("org cte node");
+
+    assert_eq!(
+        org.name_spans.len(),
+        3,
+        "definition, recursive self-reference, and outer reference should all be tracked"
+    );
+    for span in &org.name_spans {
+        assert_eq!(&sql[span.start..span.end], "org");
+    }
+}
+
+#[test]
+fn name_spans_self_join_are_instance_specific() {
+    let sql =
+        "SELECT e1.name, e2.name FROM employees e1 JOIN employees e2 ON e1.manager_id = e2.id";
+    let result = run_analysis(sql, Dialect::Postgres, None);
+    let stmt = &result.statements[0];
+    let employee_nodes: Vec<_> = stmt
+        .nodes
+        .iter()
+        .filter(|node| {
+            node.node_type == NodeType::Table && node.qualified_name.as_deref() == Some("employees")
+        })
+        .collect();
+
+    assert_eq!(
+        employee_nodes.len(),
+        2,
+        "expected one node per self-join instance"
+    );
+    assert!(employee_nodes.iter().all(|node| node.name_spans.len() == 1));
+    assert_ne!(
+        employee_nodes[0].name_spans[0],
+        employee_nodes[1].name_spans[0]
+    );
+    for node in employee_nodes {
+        let span = node.name_spans[0];
+        assert_eq!(&sql[span.start..span.end], "employees");
+    }
+}
+
+#[test]
+fn name_spans_distinguish_same_label_qualified_relations() {
+    let sql = "SELECT * FROM sales.orders so JOIN archive.orders ao ON so.id = ao.id";
+    let result = run_analysis(sql, Dialect::Postgres, None);
+    let stmt = &result.statements[0];
+    let sales_orders = stmt
+        .nodes
+        .iter()
+        .find(|node| node.qualified_name.as_deref() == Some("sales.orders"))
+        .expect("sales.orders node");
+    let archive_orders = stmt
+        .nodes
+        .iter()
+        .find(|node| node.qualified_name.as_deref() == Some("archive.orders"))
+        .expect("archive.orders node");
+
+    assert_eq!(sales_orders.name_spans.len(), 1);
+    assert_eq!(archive_orders.name_spans.len(), 1);
+    assert_ne!(sales_orders.name_spans[0], archive_orders.name_spans[0]);
+    assert_eq!(
+        &sql[sales_orders.name_spans[0].start..sales_orders.name_spans[0].end],
+        "orders"
+    );
+    assert_eq!(
+        &sql[archive_orders.name_spans[0].start..archive_orders.name_spans[0].end],
+        "orders"
+    );
+}
+
+#[test]
+fn name_spans_preserve_quoted_identifier_parts_with_embedded_dots() {
+    let sql = "SELECT * FROM \"my.schema\".\"my.table\"";
+    let result = run_analysis(sql, Dialect::Postgres, None);
+    let stmt = &result.statements[0];
+    let table = stmt
+        .nodes
+        .iter()
+        .find(|node| node.node_type == NodeType::Table)
+        .expect("quoted table node");
+
+    assert_eq!(table.name_spans.len(), 1);
+    let span = table.name_spans[0];
+    assert_eq!(&sql[span.start..span.end], "my.table");
+}
+
+#[test]
+fn cte_body_span_skips_optional_column_list() {
+    let sql =
+        "WITH metrics(user_id, total) AS (SELECT id, amount FROM orders) SELECT * FROM metrics";
+    let result = run_analysis(sql, Dialect::Postgres, None);
+    let stmt = &result.statements[0];
+    let metrics = find_cte_node(stmt, "metrics").expect("metrics cte node");
+
+    let body = metrics
+        .body_span
+        .expect("cte body span should be populated");
+    assert_eq!(
+        &sql[body.start..body.end],
+        "(SELECT id, amount FROM orders)"
+    );
+}
+
+#[test]
+fn cte_body_span_skips_materialization_modifiers() {
+    let sql = "WITH metrics AS NOT MATERIALIZED (SELECT id FROM orders) SELECT * FROM metrics";
+    let result = run_analysis(sql, Dialect::Postgres, None);
+    let stmt = &result.statements[0];
+    let metrics = find_cte_node(stmt, "metrics").expect("metrics cte node");
+
+    let body = metrics
+        .body_span
+        .expect("cte body span should be populated");
+    assert_eq!(&sql[body.start..body.end], "(SELECT id FROM orders)");
+}
+
+#[test]
+fn cte_body_span_skips_dollar_quoted_strings() {
+    let sql = "WITH metrics AS (SELECT $$)$$ AS x) SELECT * FROM metrics";
+    let result = run_analysis(sql, Dialect::Postgres, None);
+    let stmt = &result.statements[0];
+    let metrics = find_cte_node(stmt, "metrics").expect("metrics cte node");
+
+    let body = metrics
+        .body_span
+        .expect("cte body span should be populated");
+    assert_eq!(&sql[body.start..body.end], "(SELECT $$)$$ AS x)");
+}
