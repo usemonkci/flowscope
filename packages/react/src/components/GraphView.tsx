@@ -17,6 +17,7 @@ import type { AnalyzeResult, Node as LineageNode } from '@pondpilot/flowscope-co
 import { useLineage, useLineageStore } from '../store';
 import { useNodeFocus } from '../hooks/useNodeFocus';
 import { useGraphFiltering } from '../hooks/useGraphFiltering';
+import { useOccurrenceShortcuts } from '../hooks/useOccurrenceShortcuts';
 import type { GraphViewProps, TableNodeData, LayoutAlgorithm } from '../types';
 import {
   getLayoutedElements,
@@ -32,6 +33,7 @@ import {
   buildScriptGraphInWorker,
   cancelPendingBuilds,
 } from '../utils/graphBuilderWorkerService';
+import { getBodySpanForSourceName, getOccurrenceSourceName } from '../utils/nodeOccurrences';
 import { ScriptNode } from './ScriptNode';
 import { ColumnNode } from './ColumnNode';
 import { SimpleTableNode } from './SimpleTableNode';
@@ -312,8 +314,10 @@ export function GraphView({
   namespaceFilter,
 }: GraphViewProps): JSX.Element {
   const { state, actions } = useLineage();
+  useOccurrenceShortcuts();
   const setLayoutMetrics = useLineageStore((store) => store.setLayoutMetrics);
   const setGraphMetrics = useLineageStore((store) => store.setGraphMetrics);
+  const requestNavigation = useLineageStore((store) => store.requestNavigation);
   const setIsLayouting = useLineageStore((store) => store.setIsLayouting);
   const setIsBuilding = useLineageStore((store) => store.setIsBuilding);
   const {
@@ -328,6 +332,7 @@ export function GraphView({
     showScriptTables,
     expandedTableIds,
     tableFilter,
+    focusedOccurrenceIndex,
   } = state;
   // Use result directly instead of useDeferredValue. The deferred approach was causing
   // ~7 second delays during concurrent rendering. Worker-based computation with
@@ -903,18 +908,22 @@ export function GraphView({
       // 2. Try to get lineage info for table/column nodes
       const lineageNode = lineageNodeMapRef.current.get(node.id);
       if (lineageNode) {
-        if (lineageNode.span) {
-          actions.highlightSpan(lineageNode.span);
-          span = lineageNode.span;
+        // Prefer the first occurrence from `nameSpans` (per-occurrence list
+        // shipped in #20). Fall back to the legacy `span` for column nodes
+        // and any future node type that doesn't yet populate `nameSpans`.
+        const targetSpan = lineageNode.nameSpans?.[0] ?? lineageNode.span;
+        if (targetSpan) {
+          actions.highlightSpan(targetSpan);
+          span = targetSpan;
         }
         onNodeClick?.(lineageNode);
 
-        if (
-          !sourceName &&
-          lineageNode.metadata &&
-          typeof lineageNode.metadata.sourceName === 'string'
-        ) {
-          sourceName = lineageNode.metadata.sourceName;
+        if (!sourceName) {
+          sourceName =
+            getOccurrenceSourceName(lineageNode, 0) ??
+            (lineageNode.metadata && typeof lineageNode.metadata.sourceName === 'string'
+              ? lineageNode.metadata.sourceName
+              : undefined);
         }
       }
 
@@ -954,6 +963,71 @@ export function GraphView({
     [actions]
   );
 
+  const handleNodeDoubleClick = useCallback(
+    (_event: React.MouseEvent, node: FlowNode) => {
+      // Double-click jumps to the CTE body for CTE nodes; for other node
+      // types the single-click handler already focused the first occurrence,
+      // so we have no extra work to do.
+      const lineageNode = lineageNodeMapRef.current.get(node.id);
+      const sourceName = lineageNode
+        ? (getOccurrenceSourceName(lineageNode, focusedOccurrenceIndex) ??
+          (typeof lineageNode.metadata?.sourceName === 'string'
+            ? lineageNode.metadata.sourceName
+            : undefined))
+        : undefined;
+      const bodySpan = lineageNode ? getBodySpanForSourceName(lineageNode, sourceName) : undefined;
+      if (lineageNode && bodySpan) {
+        if (selectedNodeId !== node.id) {
+          actions.selectNode(node.id);
+        }
+        actions.highlightSpan(bodySpan);
+        if (sourceName) {
+          actions.requestNavigation({
+            sourceName,
+            span: bodySpan,
+            targetName: lineageNode.label,
+            targetType: 'cte',
+          });
+        }
+      }
+    },
+    [actions, focusedOccurrenceIndex, selectedNodeId]
+  );
+
+  useEffect(() => {
+    if (selectedNodeId === null) {
+      return;
+    }
+
+    const lineageNode = lineageNodeMapRef.current.get(selectedNodeId);
+    if (!lineageNode) {
+      return;
+    }
+
+    const span = lineageNode.nameSpans?.[focusedOccurrenceIndex] ?? lineageNode.span;
+    const sourceName =
+      getOccurrenceSourceName(lineageNode, focusedOccurrenceIndex) ??
+      (typeof lineageNode.metadata?.sourceName === 'string'
+        ? lineageNode.metadata.sourceName
+        : undefined);
+    const targetType =
+      lineageNode.type === 'table' ||
+      lineageNode.type === 'view' ||
+      lineageNode.type === 'cte' ||
+      lineageNode.type === 'column'
+        ? lineageNode.type
+        : undefined;
+
+    if (sourceName && span) {
+      requestNavigation({
+        sourceName,
+        span,
+        targetName: lineageNode.label,
+        targetType,
+      });
+    }
+  }, [requestNavigation, focusedOccurrenceIndex, selectedNodeId]);
+
   const handlePaneClick = useCallback(() => {
     actions.selectNode(null);
   }, [actions]);
@@ -983,6 +1057,7 @@ export function GraphView({
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onNodeClick={handleNodeClick}
+        onNodeDoubleClick={handleNodeDoubleClick}
         onEdgeClick={handleEdgeClick}
         onPaneClick={handlePaneClick}
         nodeTypes={nodeTypes}
