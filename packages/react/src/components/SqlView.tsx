@@ -1,13 +1,15 @@
-import { useMemo, useCallback, useEffect, useRef, type JSX } from 'react';
+import { useMemo, useCallback, useEffect, useRef, useState, type JSX } from 'react';
 import CodeMirror, { type ReactCodeMirrorRef } from '@uiw/react-codemirror';
 import { sql } from '@codemirror/lang-sql';
 import { EditorView, Decoration, type DecorationSet } from '@codemirror/view';
 import { StateField, StateEffect } from '@codemirror/state';
 import { oneDark } from '@codemirror/theme-one-dark';
+import { charOffsetToByteOffset } from '@pondpilot/flowscope-core';
 
-import { useLineage } from '../store';
+import { useLineage, useLineageStore } from '../store';
 import type { SqlViewProps } from '../types';
 import { trySpanToCharRange } from '../utils/sqlSpans';
+import { buildSpanIndex, findNodeAtByteOffset } from '../utils/revealInGraph';
 
 type HighlightRange = { from: number; to: number; className: string };
 
@@ -65,6 +67,7 @@ export function SqlView({
   highlightedSpan: highlightedSpanProp,
 }: SqlViewProps): JSX.Element {
   const { state, actions } = useLineage();
+  const revealNodeInGraph = useLineageStore((store) => store.revealNodeInGraph);
   const isControlled = value !== undefined;
 
   // Warn in dev mode if highlightedSpan is passed without value (it will be ignored)
@@ -99,6 +102,84 @@ export function SqlView({
   const editorRef = useRef<ReactCodeMirrorRef>(null);
   const lastAutoScrolledHighlightKeyRef = useRef<string | null>(null);
 
+  // Interval index of every known `nameSpan` / `bodySpan` in the current
+  // analysis result. Rebuilt only when the result identity changes.
+  const spanIndex = useMemo(() => buildSpanIndex(state.result), [state.result]);
+
+  // Node id under the caret, or null when the cursor is in whitespace / the
+  // index is empty. Drives the "Reveal in lineage" button and the context-menu
+  // entry. Works in both controlled and uncontrolled modes — the byte offsets
+  // come from `sqlText` (whatever the editor is displaying) and the spans come
+  // from the store's analysis result. When the displayed text doesn't
+  // correspond to the analyzed SQL (e.g. the resolved/compiled view), span
+  // lookups will typically miss, so the button stays hidden.
+  const [revealCandidateId, setRevealCandidateId] = useState<string | null>(null);
+
+  const computeRevealCandidate = useCallback(
+    (charOffset: number | null): string | null => {
+      if (charOffset === null) return null;
+      if (spanIndex.entries.length === 0) return null;
+      const byteOffset = charOffsetToByteOffset(sqlText, charOffset);
+      const hit = findNodeAtByteOffset(spanIndex, byteOffset);
+      return hit ? hit.nodeId : null;
+    },
+    [sqlText, spanIndex]
+  );
+
+  // CodeMirror update listener — recomputes the reveal candidate on every
+  // selection change or document edit (edits shift offsets around, so the
+  // cached candidate goes stale).
+  const selectionListener = useMemo(
+    () =>
+      EditorView.updateListener.of((update) => {
+        if (!update.selectionSet && !update.docChanged) return;
+        const head = update.state.selection.main.head;
+        setRevealCandidateId(computeRevealCandidate(head));
+      }),
+    [computeRevealCandidate]
+  );
+
+  // Recompute whenever inputs to computeRevealCandidate change (e.g. when the
+  // analysis result refreshes) without waiting for the user to move the cursor.
+  useEffect(() => {
+    const view = editorRef.current?.view;
+    if (!view) {
+      setRevealCandidateId(null);
+      return;
+    }
+    const head = view.state.selection.main.head;
+    setRevealCandidateId(computeRevealCandidate(head));
+  }, [computeRevealCandidate]);
+
+  const handleReveal = useCallback(() => {
+    if (!revealCandidateId) return;
+    revealNodeInGraph(revealCandidateId);
+  }, [revealCandidateId, revealNodeInGraph]);
+
+  // Wire a context-menu entry on the editor DOM. We can't directly inject
+  // into the native menu, so we suppress it when a candidate exists and show
+  // a lightweight overlay at the click position.
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+  const handleContextMenu = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      if (!revealCandidateId) return;
+      event.preventDefault();
+      setContextMenu({ x: event.clientX, y: event.clientY });
+    },
+    [revealCandidateId]
+  );
+
+  useEffect(() => {
+    if (!contextMenu) return;
+    const close = () => setContextMenu(null);
+    window.addEventListener('click', close);
+    window.addEventListener('scroll', close, true);
+    return () => {
+      window.removeEventListener('click', close);
+      window.removeEventListener('scroll', close, true);
+    };
+  }, [contextMenu]);
+
   const extensions = useMemo(
     () => [
       sql(),
@@ -106,8 +187,9 @@ export function SqlView({
       baseTheme,
       EditorView.lineWrapping,
       EditorView.editable.of(editable),
+      selectionListener,
     ],
-    [editable]
+    [editable, selectionListener]
   );
 
   const theme = useMemo(() => (isDark ? oneDark : 'light'), [isDark]);
@@ -162,8 +244,20 @@ export function SqlView({
     }
   }, [highlightedSpan, issueHighlights, isControlled, sqlText]);
 
+  const canReveal = revealCandidateId !== null;
+
   return (
-    <div className={`flowscope-sql-view ${className || ''}`}>
+    <div className={`flowscope-sql-view ${className || ''}`} onContextMenu={handleContextMenu}>
+      {canReveal && (
+        <button
+          type="button"
+          className="flowscope-reveal-action"
+          onClick={handleReveal}
+          title="Center the graph on the node under the cursor"
+        >
+          Reveal in lineage
+        </button>
+      )}
       <CodeMirror
         ref={editorRef}
         value={sqlText}
@@ -178,6 +272,25 @@ export function SqlView({
         }}
         className="flowscope-codemirror"
       />
+      {contextMenu && canReveal && (
+        <button
+          type="button"
+          role="menuitem"
+          className="flowscope-reveal-action"
+          style={{
+            position: 'fixed',
+            top: contextMenu.y,
+            left: contextMenu.x,
+            right: 'auto',
+          }}
+          onClick={() => {
+            handleReveal();
+            setContextMenu(null);
+          }}
+        >
+          Reveal in lineage
+        </button>
+      )}
     </div>
   );
 }

@@ -549,3 +549,60 @@
 .dark .custom-scrollbar::-webkit-scrollbar-thumb:hover {
   background-color: #64748b;
 }
+
+/* Reveal-in-lineage pulse: applied to a React Flow node when the user triggers
+   the text→graph navigation action (#24). Auto-removed after the animation
+   completes by the GraphView RevealHandler. */
+@keyframes flowscope-reveal-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(76, 97, 255, 0.55);
+  }
+  60% {
+    box-shadow: 0 0 0 12px rgba(76, 97, 255, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(76, 97, 255, 0);
+  }
+}
+
+.flowscope-reveal-pulse {
+  animation: flowscope-reveal-pulse 1.2s ease-out;
+  border-radius: 8px;
+}
+
+/* Floating "Reveal in lineage" action button rendered above the SQL editor
+   when the cursor sits inside an indexed span. */
+.flowscope-sql-view {
+  position: relative;
+}
+
+.flowscope-reveal-action {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.75rem;
+  z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem 0.6rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: #fff;
+  background-color: rgba(76, 97, 255, 0.92);
+  border: none;
+  border-radius: 6px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+  cursor: pointer;
+  transition:
+    background-color 0.15s ease,
+    opacity 0.15s ease;
+}
+
+.flowscope-reveal-action:hover {
+  background-color: rgba(76, 97, 255, 1);
+}
+
+.flowscope-reveal-action:disabled {
+  background-color: rgba(148, 163, 184, 0.7);
+  cursor: not-allowed;
+}

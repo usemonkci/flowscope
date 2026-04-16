@@ -86,6 +86,50 @@ function NodeFocusHandler({
 }
 
 /**
+ * Duration of the reveal pulse class on a node. Matches the CSS animation in
+ * `styles.css` (`.flowscope-reveal-pulse`). Kept slightly longer so the class
+ * is guaranteed to be removed after the animation finishes.
+ */
+const REVEAL_PULSE_DURATION_MS = 1300;
+
+/**
+ * Watches the store's `revealRequest` and drives both the graph's fitView
+ * animation and the transient pulse class on the target node. A nonce is used
+ * instead of a plain node id so re-revealing the same node restarts the
+ * animation.
+ */
+function RevealHandler({ applyPulse }: { applyPulse: (nodeId: string) => void }): null {
+  const revealRequest = useLineageStore((store) => store.revealRequest);
+  const clearRevealRequest = useLineageStore((store) => store.clearRevealRequest);
+  const { fitView, getNode } = useReactFlow();
+  const lastNonceRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!revealRequest) {
+      lastNonceRef.current = null;
+      return;
+    }
+    if (revealRequest.nonce === lastNonceRef.current) return;
+    lastNonceRef.current = revealRequest.nonce;
+
+    // ReactFlow needs a tick to render newly-selected nodes before we can
+    // query their positions. 100ms mirrors useNodeFocus.
+    const timer = setTimeout(() => {
+      const node = getNode(revealRequest.nodeId);
+      if (node) {
+        fitView({ nodes: [{ id: revealRequest.nodeId }], duration: 500, padding: 0.5 });
+        applyPulse(revealRequest.nodeId);
+      }
+      clearRevealRequest();
+    }, 100);
+
+    return () => clearTimeout(timer);
+  }, [revealRequest, fitView, getNode, applyPulse, clearRevealRequest]);
+
+  return null;
+}
+
+/**
  * Helper component to trigger fitView when fitViewTrigger changes.
  * Must be rendered inside ReactFlow to access useReactFlow hook.
  */
@@ -1035,6 +1079,51 @@ export function GraphView({
     actions.selectNode(null);
   }, [actions]);
 
+  // Apply the reveal pulse class to a node for REVEAL_PULSE_DURATION_MS, then
+  // strip it. Used by RevealHandler in response to text→graph navigation.
+  const pulseTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const applyRevealPulse = useCallback(
+    (nodeId: string) => {
+      const existingTimer = pulseTimersRef.current.get(nodeId);
+      if (existingTimer) clearTimeout(existingTimer);
+
+      setNodes((current) =>
+        current.map((n) =>
+          n.id === nodeId
+            ? {
+                ...n,
+                className: [n.className, 'flowscope-reveal-pulse'].filter(Boolean).join(' '),
+              }
+            : n
+        )
+      );
+
+      const timer = setTimeout(() => {
+        setNodes((current) =>
+          current.map((n) => {
+            if (n.id !== nodeId || !n.className) return n;
+            const next = n.className
+              .split(/\s+/)
+              .filter((c) => c && c !== 'flowscope-reveal-pulse')
+              .join(' ');
+            return { ...n, className: next || undefined };
+          })
+        );
+        pulseTimersRef.current.delete(nodeId);
+      }, REVEAL_PULSE_DURATION_MS);
+      pulseTimersRef.current.set(nodeId, timer);
+    },
+    [setNodes]
+  );
+
+  useEffect(() => {
+    const timers = pulseTimersRef.current;
+    return () => {
+      for (const timer of timers.values()) clearTimeout(timer);
+      timers.clear();
+    };
+  }, []);
+
   if (!result || !result.statements || result.statements.length === 0) {
     return (
       <div
@@ -1071,6 +1160,7 @@ export function GraphView({
         onlyRenderVisibleElements
       >
         <NodeFocusHandler focusNodeId={focusNodeId} onFocusApplied={onFocusApplied} />
+        <RevealHandler applyPulse={applyRevealPulse} />
         <ViewportHandler initialViewport={initialViewport} onViewportChange={onViewportChange} />
         <FitViewHandler trigger={fitViewTrigger} />
         <Background />
