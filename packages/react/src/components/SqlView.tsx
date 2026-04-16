@@ -126,7 +126,9 @@ export function SqlView({
   // analysis result. Rebuilt only when the relevant analysis slice changes.
   const spanIndex = useMemo(
     () =>
-      revealScope.enabled ? buildSpanIndex(state.result, revealScope.sourceName) : buildSpanIndex(null),
+      revealScope.enabled
+        ? buildSpanIndex(state.result, revealScope.sourceName)
+        : buildSpanIndex(null),
     [revealScope.enabled, revealScope.sourceName, state.result]
   );
   const revealLookup = useMemo(
@@ -206,42 +208,23 @@ export function SqlView({
     [revealCandidateId, revealNodeInGraph]
   );
 
-  const getRevealCandidateAtClientPoint = useCallback(
-    (x: number, y: number): string | null => {
-      const view = editorRef.current?.view;
-      if (!view) return null;
-      const pos = view.posAtCoords({ x, y });
-      return computeRevealCandidate(pos ?? null);
-    },
-    [computeRevealCandidate]
-  );
-
-  // Wire a context-menu entry on the editor DOM. We can't directly inject
-  // into the native menu, so we suppress it when a candidate exists and show
-  // a lightweight overlay at the click position.
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; nodeId: string } | null>(
-    null
-  );
-  const handleContextMenu = useCallback(
+  // Alt+click directly on an indexed span reveals that span in the graph
+  // without requiring the user to reach for the floating button. Preserves
+  // the native context menu (and copy/paste) because we don't touch
+  // `contextmenu` events.
+  const handleEditorMouseDown = useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {
-      const nodeId = getRevealCandidateAtClientPoint(event.clientX, event.clientY);
+      if (!event.altKey || event.button !== 0) return;
+      const view = editorRef.current?.view;
+      if (!view) return;
+      const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
+      const nodeId = computeRevealCandidate(pos ?? null);
       if (!nodeId) return;
       event.preventDefault();
-      setContextMenu({ x: event.clientX, y: event.clientY, nodeId });
+      handleReveal(nodeId);
     },
-    [getRevealCandidateAtClientPoint]
+    [computeRevealCandidate, handleReveal]
   );
-
-  useEffect(() => {
-    if (!contextMenu) return;
-    const close = () => setContextMenu(null);
-    window.addEventListener('click', close);
-    window.addEventListener('scroll', close, true);
-    return () => {
-      window.removeEventListener('click', close);
-      window.removeEventListener('scroll', close, true);
-    };
-  }, [contextMenu]);
 
   const extensions = useMemo(
     () => [
@@ -310,13 +293,14 @@ export function SqlView({
   const canReveal = revealCandidateId !== null;
 
   return (
-    <div className={`flowscope-sql-view ${className || ''}`} onContextMenu={handleContextMenu}>
+    <div className={`flowscope-sql-view ${className || ''}`} onMouseDown={handleEditorMouseDown}>
       {canReveal && (
         <button
           type="button"
           className="flowscope-reveal-action"
           onClick={() => handleReveal()}
-          title="Center the graph on the node under the cursor"
+          title="Center the lineage graph on the node under the cursor (or Alt+click a span)"
+          aria-label="Reveal the SQL identifier under the cursor in the lineage graph"
         >
           Reveal in lineage
         </button>
@@ -335,25 +319,6 @@ export function SqlView({
         }}
         className="flowscope-codemirror"
       />
-      {contextMenu && canReveal && (
-        <button
-          type="button"
-          role="menuitem"
-          className="flowscope-reveal-action"
-          style={{
-            position: 'fixed',
-            top: contextMenu.y,
-            left: contextMenu.x,
-            right: 'auto',
-          }}
-          onClick={() => {
-            handleReveal(contextMenu.nodeId);
-            setContextMenu(null);
-          }}
-        >
-          Reveal in lineage
-        </button>
-      )}
     </div>
   );
 }

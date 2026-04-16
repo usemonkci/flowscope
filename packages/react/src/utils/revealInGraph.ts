@@ -8,7 +8,7 @@ import {
   nodesInStatement,
 } from '@pondpilot/flowscope-core';
 
-import { OUTPUT_NODE_TYPE } from './lineageHelpers';
+import { OUTPUT_NODE_TYPE, hybridTableNodeId } from './lineageHelpers';
 import {
   getBodySpans,
   mergeNodesForNavigation,
@@ -106,7 +106,11 @@ function buildMergedNodeMap(result: AnalyzeResult, sourceName?: string): Map<str
     for (const rawNode of nodesInStatement(result, statement.statementIndex)) {
       const resolvedSourceName =
         statement.sourceName ?? resolveNodeSourceName(rawNode, statementById) ?? sourceName;
-      const scopedNode = scopeNodeToStatement(rawNode, statement.statementIndex, resolvedSourceName);
+      const scopedNode = scopeNodeToStatement(
+        rawNode,
+        statement.statementIndex,
+        resolvedSourceName
+      );
       const merged = mergeNodesForNavigation(
         mergedNodes.get(scopedNode.id) ?? null,
         scopedNode,
@@ -262,7 +266,10 @@ export function buildRevealLookup(result: AnalyzeResult | null, sourceName?: str
   }
 
   const mergedNodes = buildMergedNodeMap(result, sourceName);
-  const ownerRelationIdByNodeId = buildOwnerRelationMap(buildScopedEdges(result, sourceName), mergedNodes);
+  const ownerRelationIdByNodeId = buildOwnerRelationMap(
+    buildScopedEdges(result, sourceName),
+    mergedNodes
+  );
   const nodesById = new Map<string, RevealLookupNode>();
 
   for (const node of mergedNodes.values()) {
@@ -282,7 +289,7 @@ function toHybridGraphId(node: RevealLookupNode): string | null {
     return null;
   }
 
-  return `table:${node.qualifiedName || node.label}`;
+  return hybridTableNodeId(node);
 }
 
 /**
@@ -302,7 +309,7 @@ export function resolveRevealGraphTarget(
 
   const relationNode =
     baseNode.type === 'column'
-      ? lookup.nodesById.get(lookup.ownerRelationIdByNodeId.get(baseNode.id) ?? '') ?? null
+      ? (lookup.nodesById.get(lookup.ownerRelationIdByNodeId.get(baseNode.id) ?? '') ?? null)
       : baseNode;
 
   if (!relationNode) {

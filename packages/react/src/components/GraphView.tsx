@@ -57,7 +57,13 @@ import {
   GraphTooltipArrow,
   GraphTooltipPortal,
 } from './ui/graph-tooltip';
-import { GRAPH_CONFIG, PANEL_STYLES, getMinimapNodeColor } from '../constants';
+import {
+  GRAPH_CONFIG,
+  NODE_FOCUS_DELAY_MS,
+  PANEL_STYLES,
+  REVEAL_PULSE_DURATION_MS,
+  getMinimapNodeColor,
+} from '../constants';
 
 const MINIMAP_NODE_LIMIT = 2000;
 const ELK_NODE_LIMIT = 2000;
@@ -86,13 +92,6 @@ function NodeFocusHandler({
 }
 
 /**
- * Duration of the reveal pulse class on a node. Matches the CSS animation in
- * `styles.css` (`.flowscope-reveal-pulse`). Kept slightly longer so the class
- * is guaranteed to be removed after the animation finishes.
- */
-const REVEAL_PULSE_DURATION_MS = 1300;
-
-/**
  * Watches the store's `revealRequest` and drives both the graph's fitView
  * animation and the transient pulse class on the target node. A nonce is used
  * instead of a plain node id so re-revealing the same node restarts the
@@ -113,7 +112,7 @@ function RevealHandler({ applyPulse }: { applyPulse: (nodeId: string) => void })
     lastNonceRef.current = revealRequest.nonce;
 
     // ReactFlow needs a tick to render newly-selected nodes before we can
-    // query their positions. 100ms mirrors useNodeFocus.
+    // query their positions (same reason `useNodeFocus` uses NODE_FOCUS_DELAY_MS).
     const timer = setTimeout(() => {
       const node = getNode(revealRequest.nodeId);
       if (node) {
@@ -121,7 +120,7 @@ function RevealHandler({ applyPulse }: { applyPulse: (nodeId: string) => void })
         applyPulse(revealRequest.nodeId);
       }
       clearRevealRequest();
-    }, 100);
+    }, NODE_FOCUS_DELAY_MS);
 
     return () => clearTimeout(timer);
   }, [revealRequest, fitView, getNode, applyPulse, clearRevealRequest]);
@@ -1138,6 +1137,21 @@ export function GraphView({
     },
     [setNodes]
   );
+
+  useEffect(() => {
+    // Drop timers whose target node no longer exists (e.g. the filter changed
+    // mid-animation). The pulse class only attaches to rendered nodes, so a
+    // stale timer would just be a leaked handle.
+    const timers = pulseTimersRef.current;
+    if (timers.size === 0) return;
+    const liveIds = new Set(nodes.map((node) => node.id));
+    for (const [nodeId, timer] of timers) {
+      if (!liveIds.has(nodeId)) {
+        clearTimeout(timer);
+        timers.delete(nodeId);
+      }
+    }
+  }, [nodes]);
 
   useEffect(() => {
     const timers = pulseTimersRef.current;

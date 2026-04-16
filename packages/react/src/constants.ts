@@ -8,6 +8,28 @@
 export const MAX_FILTER_DISPLAY_LENGTH = 40;
 
 /**
+ * Delay before focusing/revealing a node in React Flow.
+ * React Flow needs a tick to render newly-selected nodes before we can query
+ * their positions via `getNode`. Used by both `useNodeFocus` (graph-initiated
+ * focus) and the reveal handler (text→graph navigation). Keep these in lockstep.
+ */
+export const NODE_FOCUS_DELAY_MS = 100;
+
+/**
+ * CSS animation duration of `.flowscope-reveal-pulse` in `styles.css`.
+ * Keep synchronized with the `animation: flowscope-reveal-pulse 1.2s ease-out`
+ * declaration — this value is the single source of truth for JS callers.
+ */
+export const REVEAL_PULSE_ANIMATION_MS = 1200;
+
+/**
+ * How long the reveal-pulse CSS class stays attached to a node. A small buffer
+ * above `REVEAL_PULSE_ANIMATION_MS` ensures the animation finishes before the
+ * class is removed (matters at low frame rates).
+ */
+export const REVEAL_PULSE_DURATION_MS = REVEAL_PULSE_ANIMATION_MS + 100;
+
+/**
  * Human-readable labels for SQL JOIN types.
  * Keys match the API format (e.g., LEFT_SEMI), values are display labels.
  */

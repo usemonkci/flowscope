@@ -565,6 +565,7 @@
   }
 }
 
+/* 1.2s must match REVEAL_PULSE_ANIMATION_MS in constants.ts. */
 .flowscope-reveal-pulse {
   animation: flowscope-reveal-pulse 1.2s ease-out;
   border-radius: 8px;

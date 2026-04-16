@@ -122,8 +122,26 @@ export interface LineageState {
   showScriptTables: boolean;
   /** Request to navigate to a specific file and location */
   navigationRequest: NavigationRequest | null;
-  /** Node ids currently rendered in the graph after filtering */
-  visibleGraphNodeIds: Set<string>;
+  /**
+   * Node ids currently rendered in the graph after filtering. Exposed as a
+   * `ReadonlySet` because consumers should not mutate the stored set; call
+   * `setVisibleGraphNodeIds` to replace it.
+   */
+  visibleGraphNodeIds: ReadonlySet<string>;
+  /**
+   * Active reveal-in-graph request. The `nonce` changes on every call so the
+   * graph re-triggers its pulse animation even when the same node id is
+   * revealed twice in a row. Consumers typically observe this field rather
+   * than writing to it; use the `revealNodeInGraph` / `clearRevealRequest`
+   * actions to drive it.
+   */
+  revealRequest: { nodeId: string; nonce: number } | null;
+  /**
+   * One-shot flag used to suppress the graph→editor navigation side effect for
+   * reveal-originated selections. Consume via
+   * `consumeSelectedNodeNavigationSuppression` rather than reading directly.
+   */
+  suppressNextSelectedNodeNavigation: boolean;
   /** Table filter configuration */
   tableFilter: TableFilter;
 }
@@ -169,12 +187,26 @@ export interface LineageActions {
   toggleShowScriptTables: () => void;
   /** Request navigation to a file/location */
   requestNavigation: (request: NavigationRequest | null) => void;
-  /** Update the set of graph node ids currently visible in the viewport */
+  /**
+   * Replace the set of graph node ids currently rendered in the viewport.
+   * Called by `GraphView` whenever its filtered graph changes; external callers
+   * normally don't need to invoke this.
+   */
   setVisibleGraphNodeIds: (nodeIds: Iterable<string>) => void;
-  /** Select a graph node from the SQL editor without bouncing back to the editor */
+  /**
+   * Select a graph node from the SQL editor (e.g. "Reveal in lineage"),
+   * triggering the pulse animation without bouncing the selection back into
+   * the editor.
+   */
   revealNodeInGraph: (nodeId: string) => void;
-  /** Clear any pending reveal request */
+  /** Clear any pending reveal request. */
   clearRevealRequest: () => void;
+  /**
+   * Read and clear the one-shot suppression flag. Returns `true` if the
+   * current selection originated from `revealNodeInGraph` and the graph→editor
+   * navigation side effect should be skipped.
+   */
+  consumeSelectedNodeNavigationSuppression: () => boolean;
   /** Set the table filter */
   setTableFilter: (filter: TableFilter) => void;
   /** Toggle selection of a table in the filter */

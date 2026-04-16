@@ -6,6 +6,25 @@ const CREATE_STATEMENT_TYPES = new Set(['CREATE_TABLE', 'CREATE_TABLE_AS', 'CREA
 /** Node type constant for output nodes. */
 export const OUTPUT_NODE_TYPE = 'output' as Node['type'];
 
+/**
+ * React Flow node id used for table/view/output relations in the hybrid
+ * script-plus-tables graph view. The id is built from the qualified name when
+ * available so the same physical table collapses to a single node across
+ * statements, falling back to the display label for unqualified references.
+ *
+ * This is the single source of truth for the scheme. `graphBuilders.ts`,
+ * `workers/graphBuilder.worker.ts`, and `utils/revealInGraph.ts` all route
+ * through these helpers so any future change to the id format stays consistent.
+ */
+export function hybridTableNodeIdFromKey(key: string): string {
+  return `table:${key}`;
+}
+
+/** Build a hybrid table node id directly from a lineage node's fields. */
+export function hybridTableNodeId(node: { qualifiedName?: string | null; label: string }): string {
+  return hybridTableNodeIdFromKey(node.qualifiedName || node.label);
+}
+
 /** Edge type constant for join dependency edges. */
 export const JOIN_DEPENDENCY_EDGE_TYPE = 'join_dependency' as Edge['type'];
 
