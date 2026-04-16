@@ -368,9 +368,7 @@ export function GraphView({
   const setVisibleGraphNodeIds = useLineageStore((store) => store.setVisibleGraphNodeIds);
   const setIsLayouting = useLineageStore((store) => store.setIsLayouting);
   const setIsBuilding = useLineageStore((store) => store.setIsBuilding);
-  const consumeSelectedNodeNavigationSuppression = useLineageStore(
-    (store) => store.consumeSelectedNodeNavigationSuppression
-  );
+  const revealRequest = useLineageStore((store) => store.revealRequest);
   const {
     result,
     selectedNodeId,
@@ -1054,12 +1052,24 @@ export function GraphView({
     [actions, focusedOccurrenceIndex, selectedNodeId]
   );
 
+  // Nonce of the most recently honored reveal-originated selection. The bounce
+  // effect keys suppression off this ref so each reveal suppresses at most one
+  // navigation, even if the effect re-fires later (e.g. focusedOccurrenceIndex
+  // changes) or two reveals land in the same render.
+  const consumedRevealSuppressionNonceRef = useRef<number | null>(null);
+
   useEffect(() => {
     if (selectedNodeId === null) {
       return;
     }
 
-    if (consumeSelectedNodeNavigationSuppression()) {
+    if (
+      revealRequest &&
+      revealRequest.suppressNavigation &&
+      revealRequest.nodeId === selectedNodeId &&
+      revealRequest.nonce !== consumedRevealSuppressionNonceRef.current
+    ) {
+      consumedRevealSuppressionNonceRef.current = revealRequest.nonce;
       return;
     }
 
@@ -1090,12 +1100,7 @@ export function GraphView({
         targetType,
       });
     }
-  }, [
-    requestNavigation,
-    focusedOccurrenceIndex,
-    selectedNodeId,
-    consumeSelectedNodeNavigationSuppression,
-  ]);
+  }, [requestNavigation, focusedOccurrenceIndex, selectedNodeId, revealRequest]);
 
   const handlePaneClick = useCallback(() => {
     actions.selectNode(null);

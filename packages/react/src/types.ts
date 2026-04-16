@@ -131,17 +131,12 @@ export interface LineageState {
   /**
    * Active reveal-in-graph request. The `nonce` changes on every call so the
    * graph re-triggers its pulse animation even when the same node id is
-   * revealed twice in a row. Consumers typically observe this field rather
-   * than writing to it; use the `revealNodeInGraph` / `clearRevealRequest`
-   * actions to drive it.
+   * revealed twice in a row. `suppressNavigation` tells the graph→editor bounce
+   * effect to skip the navigation side effect for this reveal (consumed once
+   * per nonce). Consumers typically observe this field rather than writing to
+   * it; use the `revealNodeInGraph` / `clearRevealRequest` actions to drive it.
    */
-  revealRequest: { nodeId: string; nonce: number } | null;
-  /**
-   * One-shot flag used to suppress the graph→editor navigation side effect for
-   * reveal-originated selections. Consume via
-   * `consumeSelectedNodeNavigationSuppression` rather than reading directly.
-   */
-  suppressNextSelectedNodeNavigation: boolean;
+  revealRequest: { nodeId: string; nonce: number; suppressNavigation: boolean } | null;
   /** Table filter configuration */
   tableFilter: TableFilter;
 }
@@ -201,12 +196,6 @@ export interface LineageActions {
   revealNodeInGraph: (nodeId: string) => void;
   /** Clear any pending reveal request. */
   clearRevealRequest: () => void;
-  /**
-   * Read and clear the one-shot suppression flag. Returns `true` if the
-   * current selection originated from `revealNodeInGraph` and the graph→editor
-   * navigation side effect should be skipped.
-   */
-  consumeSelectedNodeNavigationSuppression: () => boolean;
   /** Set the table filter */
   setTableFilter: (filter: TableFilter) => void;
   /** Toggle selection of a table in the filter */

@@ -916,6 +916,9 @@ function buildHybridGraph(
     const sourceId = `script:${slices[0].meta.sourceName || 'unknown'}`;
 
     // Edges: Script -> Table (Writes)
+    // Hybrid table node ids flow through `hybridTableNodeIdFromKey`; keep this
+    // in sync with `graphBuilder.worker.ts` and `utils/revealInGraph.ts` so
+    // text→graph reveal resolves to the same React Flow id produced here.
     writeQualified.forEach((qName) => {
       const tableId = hybridTableNodeIdFromKey(qName);
       edges.push({

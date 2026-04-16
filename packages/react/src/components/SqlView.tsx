@@ -215,6 +215,10 @@ export function SqlView({
   const handleEditorMouseDown = useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {
       if (!event.altKey || event.button !== 0) return;
+      // Let clicks on the reveal button handle themselves; we bind at the
+      // wrapper so we'd otherwise re-trigger reveal on the button too.
+      const target = event.target as HTMLElement | null;
+      if (target?.closest('.flowscope-reveal-action')) return;
       const view = editorRef.current?.view;
       if (!view) return;
       const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });

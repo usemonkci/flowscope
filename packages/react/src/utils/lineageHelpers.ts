@@ -15,8 +15,16 @@ export const OUTPUT_NODE_TYPE = 'output' as Node['type'];
  * This is the single source of truth for the scheme. `graphBuilders.ts`,
  * `workers/graphBuilder.worker.ts`, and `utils/revealInGraph.ts` all route
  * through these helpers so any future change to the id format stays consistent.
+ *
+ * Keys must not contain a colon: the `table:` prefix plus colons in the key
+ * would produce ids that collide with other valid keys. DuckDB/Postgres
+ * qualified names use dots, so this holds in practice; we assert in dev to
+ * catch regressions early (e.g. a future dialect using `schema:table`).
  */
 export function hybridTableNodeIdFromKey(key: string): string {
+  if (process.env.NODE_ENV !== 'production' && key.includes(':')) {
+    throw new Error(`hybridTableNodeIdFromKey: key must not contain ':' (got ${key})`);
+  }
   return `table:${key}`;
 }
 

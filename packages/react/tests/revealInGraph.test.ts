@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import type { AnalyzeResult } from '@pondpilot/flowscope-core';
+import { charOffsetToByteOffset, type AnalyzeResult } from '@pondpilot/flowscope-core';
 
 import type { SpanIndex, SpanIndexEntry } from '../src/utils/revealInGraph';
 import {
@@ -91,6 +91,27 @@ describe('findNodeAtByteOffset', () => {
     expect(findNodeAtByteOffset(idx, 10)?.nodeId).toBe('a');
     // `span.end` is exclusive:
     expect(findNodeAtByteOffset(idx, 20)).toBeNull();
+  });
+
+  it('aligns with charOffsetToByteOffset for multi-byte identifiers', () => {
+    // SQL spans are UTF-8 byte offsets, CodeMirror cursors are UTF-16 char
+    // offsets. The reveal flow composes `charOffsetToByteOffset` with
+    // `findNodeAtByteOffset`, so identifiers containing multi-byte characters
+    // must round-trip correctly.
+    const sql = 'SELECT * FROM 日本 WHERE id = 1';
+    //          0123456789012345678...
+    //                        ^^ `日本` at char 14..15, UTF-8 bytes 14..19.
+    const nameStartByte = charOffsetToByteOffset(sql, 14);
+    const nameEndByte = charOffsetToByteOffset(sql, 16);
+    expect(nameStartByte).toBe(14);
+    expect(nameEndByte).toBe(20); // each CJK char is 3 bytes in UTF-8
+
+    const idx = index(entry('table:日本', 'name', nameStartByte, nameEndByte));
+
+    // Cursor inside `日本` (between the two characters, char offset 15).
+    expect(findNodeAtByteOffset(idx, charOffsetToByteOffset(sql, 15))?.nodeId).toBe('table:日本');
+    // Cursor just past `日本` (char offset 16) is on the exclusive end.
+    expect(findNodeAtByteOffset(idx, charOffsetToByteOffset(sql, 16))).toBeNull();
   });
 });
 
