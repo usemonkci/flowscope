@@ -21,6 +21,7 @@ import {
   formatJoinType,
   getCreatedRelationNodeIds,
   groupOutputColumns,
+  hybridTableNodeIdFromKey,
   resolveOutputMapping,
   edgePairKey,
   syntheticEdgeId,
@@ -1005,20 +1006,25 @@ function buildHybridGraph(
 
     const sourceId = `script:${slices[0].meta.sourceName || 'unknown'}`;
 
+    // Hybrid table node ids flow through `hybridTableNodeIdFromKey`; keep this
+    // in sync with `utils/graphBuilders.ts` and `utils/revealInGraph.ts` so
+    // text→graph reveal resolves to the same React Flow id produced here.
     writeQualified.forEach((qName) => {
+      const tableId = hybridTableNodeIdFromKey(qName);
       edges.push({
-        id: `${sourceId}->table:${qName}`,
+        id: `${sourceId}->${tableId}`,
         source: sourceId,
-        target: `table:${qName}`,
+        target: tableId,
         type: 'animated',
         data: { type: 'data_flow' },
       });
     });
 
     readQualified.forEach((qName) => {
+      const tableId = hybridTableNodeIdFromKey(qName);
       edges.push({
-        id: `table:${qName}->${sourceId}`,
-        source: `table:${qName}`,
+        id: `${tableId}->${sourceId}`,
+        source: tableId,
         target: sourceId,
         type: 'animated',
         data: { type: 'data_flow' },
@@ -1030,15 +1036,16 @@ function buildHybridGraph(
     const isHighlighted = !!(
       lowerCaseSearchTerm && info.label.toLowerCase().includes(lowerCaseSearchTerm)
     );
+    const tableId = hybridTableNodeIdFromKey(qName);
     nodes.push({
-      id: `table:${qName}`,
+      id: tableId,
       type: 'simpleTableNode',
       position: { x: 0, y: 0 },
       data: {
         label: info.label,
         nodeType: 'table',
         columns: [],
-        isSelected: `table:${qName}` === selectedNodeId,
+        isSelected: tableId === selectedNodeId,
         isHighlighted,
         isCollapsed: false,
         sourceName: info.sourceName,

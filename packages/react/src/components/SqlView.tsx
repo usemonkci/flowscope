@@ -1,13 +1,21 @@
-import { useMemo, useCallback, useEffect, useRef, type JSX } from 'react';
+import { useMemo, useCallback, useEffect, useRef, useState, type JSX } from 'react';
 import CodeMirror, { type ReactCodeMirrorRef } from '@uiw/react-codemirror';
 import { sql } from '@codemirror/lang-sql';
 import { EditorView, Decoration, type DecorationSet } from '@codemirror/view';
 import { StateField, StateEffect } from '@codemirror/state';
 import { oneDark } from '@codemirror/theme-one-dark';
+import { charOffsetToByteOffset } from '@pondpilot/flowscope-core';
 
-import { useLineage } from '../store';
+import { useLineage, useLineageStore } from '../store';
 import type { SqlViewProps } from '../types';
 import { trySpanToCharRange } from '../utils/sqlSpans';
+import {
+  buildRevealLookup,
+  buildSpanIndex,
+  findNodeAtByteOffset,
+  resolveRevealAnalysisScope,
+  resolveRevealGraphTarget,
+} from '../utils/revealInGraph';
 
 type HighlightRange = { from: number; to: number; className: string };
 
@@ -63,8 +71,11 @@ export function SqlView({
   value,
   isDark,
   highlightedSpan: highlightedSpanProp,
+  analyzedSourceName,
 }: SqlViewProps): JSX.Element {
   const { state, actions } = useLineage();
+  const revealNodeInGraph = useLineageStore((store) => store.revealNodeInGraph);
+  const visibleGraphNodeIds = useLineageStore((store) => store.visibleGraphNodeIds);
   const isControlled = value !== undefined;
 
   // Warn in dev mode if highlightedSpan is passed without value (it will be ignored)
@@ -99,6 +110,126 @@ export function SqlView({
   const editorRef = useRef<ReactCodeMirrorRef>(null);
   const lastAutoScrolledHighlightKeyRef = useRef<string | null>(null);
 
+  const revealScope = useMemo(
+    () =>
+      resolveRevealAnalysisScope({
+        result: state.result,
+        isControlled,
+        sqlText,
+        analyzedSql: state.sql,
+        analyzedSourceName,
+      }),
+    [analyzedSourceName, isControlled, sqlText, state.result, state.sql]
+  );
+
+  // Interval index of every known `nameSpan` / `bodySpan` in the current
+  // analysis result. Rebuilt only when the relevant analysis slice changes.
+  const spanIndex = useMemo(
+    () =>
+      revealScope.enabled
+        ? buildSpanIndex(state.result, revealScope.sourceName)
+        : buildSpanIndex(null),
+    [revealScope.enabled, revealScope.sourceName, state.result]
+  );
+  const revealLookup = useMemo(
+    () =>
+      revealScope.enabled
+        ? buildRevealLookup(state.result, revealScope.sourceName)
+        : buildRevealLookup(null),
+    [revealScope.enabled, revealScope.sourceName, state.result]
+  );
+
+  // Node id under the caret, or null when the cursor is in whitespace / the
+  // index is empty. Drives the "Reveal in lineage" button and the context-menu
+  // entry. Works in both controlled and uncontrolled modes — the byte offsets
+  // come from `sqlText` (whatever the editor is displaying) and the spans come
+  // from the store's analysis result. When the displayed text doesn't
+  // correspond to the analyzed SQL (e.g. the resolved/compiled view), span
+  // lookups will typically miss, so the button stays hidden.
+  const [revealCandidateId, setRevealCandidateId] = useState<string | null>(null);
+
+  const computeRevealCandidate = useCallback(
+    (charOffset: number | null): string | null => {
+      if (charOffset === null) return null;
+      if (!revealScope.enabled || spanIndex.entries.length === 0) return null;
+      const byteOffset = charOffsetToByteOffset(sqlText, charOffset);
+      const hit = findNodeAtByteOffset(spanIndex, byteOffset);
+      if (!hit) return null;
+
+      return resolveRevealGraphTarget(revealLookup, hit.nodeId, {
+        viewMode: state.viewMode,
+        showColumnEdges: state.showColumnEdges,
+        showScriptTables: state.showScriptTables,
+        visibleNodeIds: visibleGraphNodeIds,
+      });
+    },
+    [
+      revealLookup,
+      revealScope.enabled,
+      sqlText,
+      spanIndex,
+      state.showColumnEdges,
+      state.showScriptTables,
+      state.viewMode,
+      visibleGraphNodeIds,
+    ]
+  );
+
+  // CodeMirror update listener — recomputes the reveal candidate on every
+  // selection change or document edit (edits shift offsets around, so the
+  // cached candidate goes stale).
+  const selectionListener = useMemo(
+    () =>
+      EditorView.updateListener.of((update) => {
+        if (!update.selectionSet && !update.docChanged) return;
+        const head = update.state.selection.main.head;
+        setRevealCandidateId(computeRevealCandidate(head));
+      }),
+    [computeRevealCandidate]
+  );
+
+  // Recompute whenever inputs to computeRevealCandidate change (e.g. when the
+  // analysis result refreshes) without waiting for the user to move the cursor.
+  useEffect(() => {
+    const view = editorRef.current?.view;
+    if (!view) {
+      setRevealCandidateId(null);
+      return;
+    }
+    const head = view.state.selection.main.head;
+    setRevealCandidateId(computeRevealCandidate(head));
+  }, [computeRevealCandidate]);
+
+  const handleReveal = useCallback(
+    (nodeId: string | null = revealCandidateId) => {
+      if (!nodeId) return;
+      revealNodeInGraph(nodeId);
+    },
+    [revealCandidateId, revealNodeInGraph]
+  );
+
+  // Alt+click directly on an indexed span reveals that span in the graph
+  // without requiring the user to reach for the floating button. Preserves
+  // the native context menu (and copy/paste) because we don't touch
+  // `contextmenu` events.
+  const handleEditorMouseDown = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      if (!event.altKey || event.button !== 0) return;
+      // Let clicks on the reveal button handle themselves; we bind at the
+      // wrapper so we'd otherwise re-trigger reveal on the button too.
+      const target = event.target as HTMLElement | null;
+      if (target?.closest('.flowscope-reveal-action')) return;
+      const view = editorRef.current?.view;
+      if (!view) return;
+      const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
+      const nodeId = computeRevealCandidate(pos ?? null);
+      if (!nodeId) return;
+      event.preventDefault();
+      handleReveal(nodeId);
+    },
+    [computeRevealCandidate, handleReveal]
+  );
+
   const extensions = useMemo(
     () => [
       sql(),
@@ -106,8 +237,9 @@ export function SqlView({
       baseTheme,
       EditorView.lineWrapping,
       EditorView.editable.of(editable),
+      selectionListener,
     ],
-    [editable]
+    [editable, selectionListener]
   );
 
   const theme = useMemo(() => (isDark ? oneDark : 'light'), [isDark]);
@@ -162,8 +294,21 @@ export function SqlView({
     }
   }, [highlightedSpan, issueHighlights, isControlled, sqlText]);
 
+  const canReveal = revealCandidateId !== null;
+
   return (
-    <div className={`flowscope-sql-view ${className || ''}`}>
+    <div className={`flowscope-sql-view ${className || ''}`} onMouseDown={handleEditorMouseDown}>
+      {canReveal && (
+        <button
+          type="button"
+          className="flowscope-reveal-action"
+          onClick={() => handleReveal()}
+          title="Center the lineage graph on the node under the cursor (or Alt+click a span)"
+          aria-label="Reveal the SQL identifier under the cursor in the lineage graph"
+        >
+          Reveal in lineage
+        </button>
+      )}
       <CodeMirror
         ref={editorRef}
         value={sqlText}

@@ -1,13 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useReactFlow } from '@xyflow/react';
 
-/**
- * Delay before focusing on a selected node after navigation.
- * Required because ReactFlow needs time to render nodes before we can
- * query their positions for fitView. Without this delay, getNode may
- * return undefined or stale position data.
- */
-const NODE_FOCUS_DELAY_MS = 100;
+import { NODE_FOCUS_DELAY_MS } from '../constants';
 
 interface UseNodeFocusOptions {
   /** Node ID to focus on */

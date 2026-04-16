@@ -122,6 +122,21 @@ export interface LineageState {
   showScriptTables: boolean;
   /** Request to navigate to a specific file and location */
   navigationRequest: NavigationRequest | null;
+  /**
+   * Node ids currently rendered in the graph after filtering. Exposed as a
+   * `ReadonlySet` because consumers should not mutate the stored set; call
+   * `setVisibleGraphNodeIds` to replace it.
+   */
+  visibleGraphNodeIds: ReadonlySet<string>;
+  /**
+   * Active reveal-in-graph request. The `nonce` changes on every call so the
+   * graph re-triggers its pulse animation even when the same node id is
+   * revealed twice in a row. `suppressNavigation` tells the graph→editor bounce
+   * effect to skip the navigation side effect for this reveal (consumed once
+   * per nonce). Consumers typically observe this field rather than writing to
+   * it; use the `revealNodeInGraph` / `clearRevealRequest` actions to drive it.
+   */
+  revealRequest: { nodeId: string; nonce: number; suppressNavigation: boolean } | null;
   /** Table filter configuration */
   tableFilter: TableFilter;
 }
@@ -167,6 +182,20 @@ export interface LineageActions {
   toggleShowScriptTables: () => void;
   /** Request navigation to a file/location */
   requestNavigation: (request: NavigationRequest | null) => void;
+  /**
+   * Replace the set of graph node ids currently rendered in the viewport.
+   * Called by `GraphView` whenever its filtered graph changes; external callers
+   * normally don't need to invoke this.
+   */
+  setVisibleGraphNodeIds: (nodeIds: Iterable<string>) => void;
+  /**
+   * Select a graph node from the SQL editor (e.g. "Reveal in lineage"),
+   * triggering the pulse animation without bouncing the selection back into
+   * the editor.
+   */
+  revealNodeInGraph: (nodeId: string) => void;
+  /** Clear any pending reveal request. */
+  clearRevealRequest: () => void;
   /** Set the table filter */
   setTableFilter: (filter: TableFilter) => void;
   /** Toggle selection of a table in the filter */
@@ -254,6 +283,8 @@ export interface SqlViewProps {
   isDark?: boolean;
   /** Span to highlight and scroll to in the editor (for controlled mode navigation) */
   highlightedSpan?: Span | null;
+  /** Source file currently shown in controlled mode; used to scope reveal lookups safely */
+  analyzedSourceName?: string;
 }
 
 /**

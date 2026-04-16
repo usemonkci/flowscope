@@ -1,0 +1,7 @@
+# Generated wasm-bindgen artifacts — do not reformat.
+# These files are produced by `scripts/build-rust.sh` and any editor-driven
+# reformat causes noisy diffs that will be clobbered on the next WASM rebuild.
+packages/core/wasm/flowscope_wasm.js
+packages/core/wasm/flowscope_wasm.d.ts
+app/public/wasm/flowscope_wasm.js
+app/public/wasm/flowscope_wasm.d.ts

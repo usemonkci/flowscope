@@ -57,7 +57,13 @@ import {
   GraphTooltipArrow,
   GraphTooltipPortal,
 } from './ui/graph-tooltip';
-import { GRAPH_CONFIG, PANEL_STYLES, getMinimapNodeColor } from '../constants';
+import {
+  GRAPH_CONFIG,
+  NODE_FOCUS_DELAY_MS,
+  PANEL_STYLES,
+  REVEAL_PULSE_DURATION_MS,
+  getMinimapNodeColor,
+} from '../constants';
 
 const MINIMAP_NODE_LIMIT = 2000;
 const ELK_NODE_LIMIT = 2000;
@@ -82,6 +88,43 @@ function NodeFocusHandler({
   onFocusApplied?: () => void;
 }): null {
   useNodeFocus({ focusNodeId, onFocusApplied });
+  return null;
+}
+
+/**
+ * Watches the store's `revealRequest` and drives both the graph's fitView
+ * animation and the transient pulse class on the target node. A nonce is used
+ * instead of a plain node id so re-revealing the same node restarts the
+ * animation.
+ */
+function RevealHandler({ applyPulse }: { applyPulse: (nodeId: string) => void }): null {
+  const revealRequest = useLineageStore((store) => store.revealRequest);
+  const clearRevealRequest = useLineageStore((store) => store.clearRevealRequest);
+  const { fitView, getNode } = useReactFlow();
+  const lastNonceRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!revealRequest) {
+      lastNonceRef.current = null;
+      return;
+    }
+    if (revealRequest.nonce === lastNonceRef.current) return;
+    lastNonceRef.current = revealRequest.nonce;
+
+    // ReactFlow needs a tick to render newly-selected nodes before we can
+    // query their positions (same reason `useNodeFocus` uses NODE_FOCUS_DELAY_MS).
+    const timer = setTimeout(() => {
+      const node = getNode(revealRequest.nodeId);
+      if (node) {
+        fitView({ nodes: [{ id: revealRequest.nodeId }], duration: 500, padding: 0.5 });
+        applyPulse(revealRequest.nodeId);
+      }
+      clearRevealRequest();
+    }, NODE_FOCUS_DELAY_MS);
+
+    return () => clearTimeout(timer);
+  }, [revealRequest, fitView, getNode, applyPulse, clearRevealRequest]);
+
   return null;
 }
 
@@ -322,8 +365,10 @@ export function GraphView({
   const setLayoutMetrics = useLineageStore((store) => store.setLayoutMetrics);
   const setGraphMetrics = useLineageStore((store) => store.setGraphMetrics);
   const requestNavigation = useLineageStore((store) => store.requestNavigation);
+  const setVisibleGraphNodeIds = useLineageStore((store) => store.setVisibleGraphNodeIds);
   const setIsLayouting = useLineageStore((store) => store.setIsLayouting);
   const setIsBuilding = useLineageStore((store) => store.setIsBuilding);
+  const revealRequest = useLineageStore((store) => store.revealRequest);
   const {
     result,
     selectedNodeId,
@@ -532,6 +577,16 @@ export function GraphView({
     [filteredGraph, highlightIds]
   );
   const renderGraphRef = useRef(renderGraph);
+
+  useEffect(() => {
+    setVisibleGraphNodeIds(filteredGraph.nodes.map((node) => node.id));
+  }, [filteredGraph.nodes, setVisibleGraphNodeIds]);
+
+  useEffect(() => {
+    return () => {
+      setVisibleGraphNodeIds([]);
+    };
+  }, [setVisibleGraphNodeIds]);
 
   useEffect(() => {
     renderGraphRef.current = renderGraph;
@@ -997,8 +1052,29 @@ export function GraphView({
     [actions, focusedOccurrenceIndex, selectedNodeId]
   );
 
+  // Track the latest reveal request via a ref so the bounce effect can peek at
+  // it without re-firing when `clearRevealRequest` lands ~100ms after a reveal
+  // (which would otherwise navigate to the reveal target and defeat the
+  // suppression). `consumedRevealSuppressionNonceRef` guarantees each reveal
+  // suppresses at most one bounce, so repeat reveals of the same node still
+  // work even though the effect only keys on selection changes.
+  const revealRequestRef = useRef(revealRequest);
+  revealRequestRef.current = revealRequest;
+  const consumedRevealSuppressionNonceRef = useRef<number | null>(null);
+
   useEffect(() => {
     if (selectedNodeId === null) {
+      return;
+    }
+
+    const currentRevealRequest = revealRequestRef.current;
+    if (
+      currentRevealRequest &&
+      currentRevealRequest.suppressNavigation &&
+      currentRevealRequest.nodeId === selectedNodeId &&
+      currentRevealRequest.nonce !== consumedRevealSuppressionNonceRef.current
+    ) {
+      consumedRevealSuppressionNonceRef.current = currentRevealRequest.nonce;
       return;
     }
 
@@ -1034,6 +1110,66 @@ export function GraphView({
   const handlePaneClick = useCallback(() => {
     actions.selectNode(null);
   }, [actions]);
+
+  // Apply the reveal pulse class to a node for REVEAL_PULSE_DURATION_MS, then
+  // strip it. Used by RevealHandler in response to text→graph navigation.
+  const pulseTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const applyRevealPulse = useCallback(
+    (nodeId: string) => {
+      const existingTimer = pulseTimersRef.current.get(nodeId);
+      if (existingTimer) clearTimeout(existingTimer);
+
+      setNodes((current) =>
+        current.map((n) =>
+          n.id === nodeId
+            ? {
+                ...n,
+                className: [n.className, 'flowscope-reveal-pulse'].filter(Boolean).join(' '),
+              }
+            : n
+        )
+      );
+
+      const timer = setTimeout(() => {
+        setNodes((current) =>
+          current.map((n) => {
+            if (n.id !== nodeId || !n.className) return n;
+            const next = n.className
+              .split(/\s+/)
+              .filter((c) => c && c !== 'flowscope-reveal-pulse')
+              .join(' ');
+            return { ...n, className: next || undefined };
+          })
+        );
+        pulseTimersRef.current.delete(nodeId);
+      }, REVEAL_PULSE_DURATION_MS);
+      pulseTimersRef.current.set(nodeId, timer);
+    },
+    [setNodes]
+  );
+
+  useEffect(() => {
+    // Drop timers whose target node no longer exists (e.g. the filter changed
+    // mid-animation). The pulse class only attaches to rendered nodes, so a
+    // stale timer would just be a leaked handle.
+    const timers = pulseTimersRef.current;
+    if (timers.size === 0) return;
+    const liveIds = new Set(nodes.map((node) => node.id));
+    for (const [nodeId, timer] of timers) {
+      if (!liveIds.has(nodeId)) {
+        clearTimeout(timer);
+        timers.delete(nodeId);
+      }
+    }
+  }, [nodes]);
+
+  useEffect(() => {
+    const timers = pulseTimersRef.current;
+    return () => {
+      for (const timer of timers.values()) clearTimeout(timer);
+      timers.clear();
+    };
+  }, []);
 
   if (!result || !result.statements || result.statements.length === 0) {
     return (
@@ -1071,6 +1207,7 @@ export function GraphView({
         onlyRenderVisibleElements
       >
         <NodeFocusHandler focusNodeId={focusNodeId} onFocusApplied={onFocusApplied} />
+        <RevealHandler applyPulse={applyRevealPulse} />
         <ViewportHandler initialViewport={initialViewport} onViewportChange={onViewportChange} />
         <FitViewHandler trigger={fitViewTrigger} />
         <Background />

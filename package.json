@@ -15,8 +15,8 @@
     "check:schema": "cargo test -p flowscope-core --test schema_guard --locked && yarn workspace @pondpilot/flowscope-core test schema-compat.test.ts --silent",
     "check:ts": "yarn workspace @pondpilot/flowscope-core test --silent",
     "check:rust": "cargo test --workspace --locked",
-    "prettier": "prettier --check \"**/*.{ts,tsx,js,jsx,json}\" --ignore-path .gitignore",
-    "prettier:write": "prettier --write \"**/*.{ts,tsx,js,jsx,json}\" --ignore-path .gitignore"
+    "prettier": "prettier --check \"**/*.{ts,tsx,js,jsx,json}\" --ignore-path .gitignore --ignore-path .prettierignore",
+    "prettier:write": "prettier --write \"**/*.{ts,tsx,js,jsx,json}\" --ignore-path .gitignore --ignore-path .prettierignore"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
