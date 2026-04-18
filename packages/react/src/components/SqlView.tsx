@@ -1,8 +1,8 @@
 import { useMemo, useCallback, useEffect, useRef, useState, type JSX } from 'react';
 import CodeMirror, { type ReactCodeMirrorRef } from '@uiw/react-codemirror';
 import { sql } from '@codemirror/lang-sql';
-import { autocompletion } from '@codemirror/autocomplete';
-import { EditorView, Decoration, type DecorationSet } from '@codemirror/view';
+import { acceptCompletion, autocompletion } from '@codemirror/autocomplete';
+import { EditorView, keymap, Decoration, type DecorationSet } from '@codemirror/view';
 import { StateField, StateEffect } from '@codemirror/state';
 import { oneDark } from '@codemirror/theme-one-dark';
 import { charOffsetToByteOffset } from '@pondpilot/flowscope-core';
@@ -261,7 +261,13 @@ export function SqlView({
         console.warn('FlowScope SQL completion failed:', error);
       },
     });
-    return autocompletion({ override: [source] });
+    // `acceptCompletion` is a no-op (returns false) when no popup is open, so
+    // binding Tab here leaves default Tab handling (indent / focus) intact
+    // outside of an active completion session.
+    return [
+      autocompletion({ override: [source] }),
+      keymap.of([{ key: 'Tab', run: acceptCompletion }]),
+    ];
   }, [editable, disableCompletion]);
 
   const extensions = useMemo(
@@ -272,7 +278,7 @@ export function SqlView({
       EditorView.lineWrapping,
       EditorView.editable.of(editable),
       selectionListener,
-      ...(completionExtension ? [completionExtension] : []),
+      ...(completionExtension ?? []),
     ],
     [editable, selectionListener, completionExtension]
   );
