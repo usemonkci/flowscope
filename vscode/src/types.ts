@@ -149,6 +149,74 @@ export interface IssueCount {
   infos: number;
 }
 
+export type Encoding = 'utf8' | 'utf16';
+
+export interface CompletionRequest {
+  sql: string;
+  dialect: Dialect;
+  cursorOffset: number;
+  encoding?: Encoding;
+}
+
+export type CompletionClause =
+  | 'select'
+  | 'from'
+  | 'where'
+  | 'join'
+  | 'on'
+  | 'groupBy'
+  | 'having'
+  | 'orderBy'
+  | 'limit'
+  | 'qualify'
+  | 'window'
+  | 'insert'
+  | 'update'
+  | 'delete'
+  | 'with'
+  | 'unknown';
+
+export type CompletionTokenKind =
+  | 'keyword'
+  | 'identifier'
+  | 'literal'
+  | 'operator'
+  | 'symbol'
+  | 'unknown';
+
+export interface CompletionToken {
+  value: string;
+  kind: CompletionTokenKind;
+  span: Span;
+}
+
+export type CompletionItemKind =
+  | 'keyword'
+  | 'operator'
+  | 'function'
+  | 'snippet'
+  | 'table'
+  | 'column'
+  | 'schemaTable';
+
+export interface CompletionItem {
+  label: string;
+  insertText: string;
+  kind: CompletionItemKind;
+  category: string;
+  score: number;
+  clauseSpecific: boolean;
+  detail?: string;
+}
+
+export interface CompletionItemsResult {
+  clause: CompletionClause;
+  token?: CompletionToken;
+  shouldShow: boolean;
+  items: CompletionItem[];
+  error?: string;
+}
+
 /**
  * Return the nodes from an `AnalyzeResult` that participate in the given
  * statement index. Uses the flat `result.nodes` collection; matching is

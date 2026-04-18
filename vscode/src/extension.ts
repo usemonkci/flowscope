@@ -3,6 +3,7 @@ import { initWasm, isWasmInitialized, getEngineVersion } from './analysis';
 import { FlowScopeCodeLensProvider } from './providers/codeLens';
 import { FlowScopeHoverProvider } from './providers/hover';
 import { FlowScopeDiagnosticsProvider } from './providers/diagnostics';
+import { FlowScopeCompletionProvider } from './providers/completion';
 import { LineagePanel } from './webview/lineagePanel';
 
 let diagnosticsProvider: FlowScopeDiagnosticsProvider | undefined;
@@ -37,6 +38,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Register Diagnostics provider
   diagnosticsProvider = new FlowScopeDiagnosticsProvider();
   context.subscriptions.push(diagnosticsProvider);
+
+  // Register Completion provider
+  const completionProvider = new FlowScopeCompletionProvider();
+  context.subscriptions.push(
+    vscode.languages.registerCompletionItemProvider(
+      { language: 'sql' },
+      completionProvider,
+      ...FlowScopeCompletionProvider.triggerCharacters
+    )
+  );
 
   // Register commands
   context.subscriptions.push(
