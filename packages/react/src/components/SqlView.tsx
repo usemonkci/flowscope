@@ -3,7 +3,7 @@ import CodeMirror, { type ReactCodeMirrorRef } from '@uiw/react-codemirror';
 import { sql } from '@codemirror/lang-sql';
 import { acceptCompletion, autocompletion } from '@codemirror/autocomplete';
 import { EditorView, keymap, Decoration, type DecorationSet } from '@codemirror/view';
-import { StateField, StateEffect } from '@codemirror/state';
+import { Prec, StateField, StateEffect } from '@codemirror/state';
 import { oneDark } from '@codemirror/theme-one-dark';
 import { charOffsetToByteOffset } from '@pondpilot/flowscope-core';
 
@@ -263,10 +263,11 @@ export function SqlView({
     });
     // `acceptCompletion` is a no-op (returns false) when no popup is open, so
     // binding Tab here leaves default Tab handling (indent / focus) intact
-    // outside of an active completion session.
+    // outside of an active completion session. `Prec.highest` ensures we win
+    // over basicSetup's `indentWithTab` binding while a popup is open.
     return [
       autocompletion({ override: [source] }),
-      keymap.of([{ key: 'Tab', run: acceptCompletion }]),
+      Prec.highest(keymap.of([{ key: 'Tab', run: acceptCompletion }])),
     ];
   }, [editable, disableCompletion]);
 
