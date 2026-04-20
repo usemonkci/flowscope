@@ -6,6 +6,8 @@ import type {
   Issue,
   Span,
   SchemaTable,
+  SchemaMetadata,
+  Dialect,
   FilterPredicate,
   AggregationInfo,
 } from '@pondpilot/flowscope-core';
@@ -302,6 +304,27 @@ export interface SqlViewProps {
   highlightedSpan?: Span | null;
   /** Source file currently shown in controlled mode; used to scope reveal lookups safely */
   analyzedSourceName?: string;
+  /**
+   * SQL dialect used when the built-in completion source is active. Defaults
+   * to `'generic'`. Only consulted while `editable` is true.
+   */
+  dialect?: Dialect;
+  /**
+   * Schema catalog forwarded to the completion engine for column resolution.
+   * Optional; omit when no catalog is available.
+   */
+  completionSchema?: SchemaMetadata;
+  /**
+   * Disable the built-in SQL completion source. Defaults to `false`.
+   * Useful when the embedder wants to supply its own completion extension.
+   */
+  disableCompletion?: boolean;
+  /**
+   * Callback invoked when the completion engine throws. If omitted, errors
+   * are logged via `console.warn` with only the message (no full error
+   * object) to avoid leaking SQL/schema details into shared consoles.
+   */
+  onCompletionError?: (error: unknown) => void;
 }
 
 /**
@@ -338,6 +361,14 @@ export interface LineageExplorerProps {
   theme?: 'light' | 'dark';
   /** Preferred default layout algorithm when the explorer first renders */
   defaultLayoutAlgorithm?: LayoutAlgorithm;
+  /** SQL dialect used by the built-in completion source in editable mode. */
+  dialect?: Dialect;
+  /** Optional schema catalog forwarded to the built-in completion source. */
+  completionSchema?: SchemaMetadata;
+  /** Disable the built-in SQL completion source in the embedded editor. */
+  disableCompletion?: boolean;
+  /** Optional hook invoked when the built-in completion source throws. */
+  onCompletionError?: (error: unknown) => void;
 }
 
 /**

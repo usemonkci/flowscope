@@ -1,12 +1,14 @@
 import { useMemo, useCallback, useEffect, useRef, useState, type JSX } from 'react';
 import CodeMirror, { type ReactCodeMirrorRef } from '@uiw/react-codemirror';
 import { sql } from '@codemirror/lang-sql';
-import { EditorView, Decoration, type DecorationSet } from '@codemirror/view';
-import { StateField, StateEffect } from '@codemirror/state';
+import { acceptCompletion, autocompletion } from '@codemirror/autocomplete';
+import { EditorView, keymap, Decoration, type DecorationSet } from '@codemirror/view';
+import { Prec, StateField, StateEffect } from '@codemirror/state';
 import { oneDark } from '@codemirror/theme-one-dark';
 import { charOffsetToByteOffset } from '@pondpilot/flowscope-core';
 
 import { useLineage, useLineageStore } from '../store';
+import { createSqlCompletionSource } from '../completion';
 import type { SqlViewProps } from '../types';
 import { trySpanToCharRange } from '../utils/sqlSpans';
 import {
@@ -72,6 +74,10 @@ export function SqlView({
   isDark,
   highlightedSpan: highlightedSpanProp,
   analyzedSourceName,
+  dialect,
+  completionSchema,
+  disableCompletion = false,
+  onCompletionError,
 }: SqlViewProps): JSX.Element {
   const { state, actions } = useLineage();
   const revealNodeInGraph = useLineageStore((store) => store.revealNodeInGraph);
@@ -236,6 +242,52 @@ export function SqlView({
     [computeRevealCandidate, handleReveal]
   );
 
+  // Mirror dialect/schema/onError into refs so the completion source reads the
+  // latest values without requiring a CodeMirror reconfigure on every change.
+  // That is also why these refs are intentionally *not* listed as deps of the
+  // memoized completion extension below.
+  const dialectRef = useRef(dialect);
+  const schemaRef = useRef(completionSchema);
+  const onCompletionErrorRef = useRef(onCompletionError);
+  useEffect(() => {
+    dialectRef.current = dialect;
+  }, [dialect]);
+  useEffect(() => {
+    schemaRef.current = completionSchema;
+  }, [completionSchema]);
+  useEffect(() => {
+    onCompletionErrorRef.current = onCompletionError;
+  }, [onCompletionError]);
+
+  const completionExtension = useMemo(() => {
+    if (!editable || disableCompletion) return null;
+    const source = createSqlCompletionSource({
+      getDialect: () => dialectRef.current ?? 'generic',
+      getSchema: () => schemaRef.current,
+      onError: (error) => {
+        const handler = onCompletionErrorRef.current;
+        if (handler) {
+          handler(error);
+          return;
+        }
+        // Log only the message to avoid dumping the full error (which may
+        // embed SQL/schema fragments) into shared consoles.
+        console.warn(
+          '[FlowScope] SQL completion failed:',
+          error instanceof Error ? error.message : String(error)
+        );
+      },
+    });
+    // `acceptCompletion` is a no-op (returns false) when no popup is open, so
+    // binding Tab here leaves default Tab handling (indent / focus) intact
+    // outside of an active completion session. `Prec.highest` ensures we win
+    // over basicSetup's `indentWithTab` binding while a popup is open.
+    return [
+      autocompletion({ override: [source] }),
+      Prec.highest(keymap.of([{ key: 'Tab', run: acceptCompletion }])),
+    ];
+  }, [editable, disableCompletion]);
+
   const extensions = useMemo(
     () => [
       sql(),
@@ -244,8 +296,9 @@ export function SqlView({
       EditorView.lineWrapping,
       EditorView.editable.of(editable),
       selectionListener,
+      ...(completionExtension ?? []),
     ],
-    [editable, selectionListener]
+    [editable, selectionListener, completionExtension]
   );
 
   const theme = useMemo(() => (isDark ? oneDark : 'light'), [isDark]);

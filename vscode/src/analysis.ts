@@ -1,5 +1,11 @@
 import * as path from 'path';
-import type { AnalyzeRequest, AnalyzeResult, Dialect } from './types';
+import type {
+  AnalyzeRequest,
+  AnalyzeResult,
+  CompletionItemsResult,
+  CompletionRequest,
+  Dialect,
+} from './types';
 
 // WASM module - loaded lazily
 let wasmModule: typeof import('../wasm-node/flowscope_wasm') | null = null;
@@ -20,11 +26,12 @@ export async function initWasm(extensionPath: string): Promise<void> {
   try {
     // Use dynamic require for the WASM module
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    wasmModule = require(wasmNodePath);
+    const loadedWasmModule = require(wasmNodePath) as typeof import('../wasm-node/flowscope_wasm');
+    wasmModule = loadedWasmModule;
 
     // Install panic hook for better error messages
-    if (wasmModule.set_panic_hook) {
-      wasmModule.set_panic_hook();
+    if (loadedWasmModule.set_panic_hook) {
+      loadedWasmModule.set_panic_hook();
     }
   } catch (error) {
     throw new Error(
@@ -58,6 +65,23 @@ export function analyzeSql(request: AnalyzeRequest): AnalyzeResult {
  */
 export function analyzeSimple(sql: string, dialect: Dialect = 'generic'): AnalyzeResult {
   return analyzeSql({ sql, dialect });
+}
+
+/**
+ * Compute context-aware SQL completion candidates at `cursorOffset`.
+ *
+ * Returns the full response from the flowscope completion engine: dialect
+ * keywords, built-in functions, operators, and any node names (tables,
+ * views, CTEs, columns) surfaced from the current parse.
+ */
+export function completionItems(request: CompletionRequest): CompletionItemsResult {
+  if (!wasmModule) {
+    throw new Error('WASM not initialized. Call initWasm() first.');
+  }
+
+  const requestJson = JSON.stringify(request);
+  const resultJson = wasmModule.completion_items_json(requestJson);
+  return JSON.parse(resultJson) as CompletionItemsResult;
 }
 
 /**
