@@ -169,6 +169,21 @@ describe('createSqlCompletionSource', () => {
     expect(onError).toHaveBeenCalledWith(error);
   });
 
+  it('treats in-band engine errors as failures and forwards them to onError', async () => {
+    completionItemsMock.mockResolvedValue(
+      engineResult({ shouldShow: false, items: [], error: 'SQL exceeds maximum length' })
+    );
+    const onError = vi.fn();
+    const source = createSqlCompletionSource({ onError });
+
+    const result = await source(contextAt('SELECT ', 7));
+
+    expect(result).toBeNull();
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError.mock.calls[0][0]).toBeInstanceOf(Error);
+    expect((onError.mock.calls[0][0] as Error).message).toBe('SQL exceeds maximum length');
+  });
+
   it('logs a warning when the engine throws and no onError hook is supplied', async () => {
     const error = new Error('engine blew up');
     completionItemsMock.mockRejectedValue(error);

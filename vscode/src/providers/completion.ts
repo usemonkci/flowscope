@@ -66,6 +66,11 @@ export class FlowScopeCompletionProvider implements vscode.CompletionItemProvide
       return null;
     }
 
+    if (result.error) {
+      console.warn('[FlowScope] completion failed:', result.error);
+      return null;
+    }
+
     if (!result.shouldShow || result.items.length === 0) {
       return null;
     }

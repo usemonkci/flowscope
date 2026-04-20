@@ -89,6 +89,11 @@ export function createSqlCompletionSource(
         return null;
       }
 
+      if (result.error) {
+        reportCompletionError(new Error(result.error), onError);
+        return null;
+      }
+
       if (!result.shouldShow || result.items.length === 0) {
         return null;
       }
