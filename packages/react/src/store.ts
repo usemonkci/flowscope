@@ -223,7 +223,9 @@ export interface LineageState {
    */
   focusOccurrence: (index: number) => void;
   toggleNodeCollapse: (nodeId: string) => void;
+  setNodeCollapsed: (nodeId: string, collapsed: boolean) => void;
   toggleTableExpansion: (tableId: string) => void;
+  setTableExpanded: (tableId: string, expanded: boolean) => void;
   /**
    * Set all nodes to collapsed or expanded state.
    * This updates the defaultCollapsed setting and clears all per-node overrides
@@ -414,6 +416,32 @@ export function createLineageStore(
         return { collapsedNodeIds: newCollapsedNodeIds };
       }),
 
+    setNodeCollapsed: (nodeId, collapsed) =>
+      set((state) => {
+        const newCollapsedNodeIds = new Set(state.collapsedNodeIds);
+        const isCollapsed = state.defaultCollapsed
+          ? !newCollapsedNodeIds.has(nodeId)
+          : newCollapsedNodeIds.has(nodeId);
+
+        if (isCollapsed === collapsed) {
+          return state;
+        }
+
+        if (state.defaultCollapsed) {
+          if (collapsed) {
+            newCollapsedNodeIds.delete(nodeId);
+          } else {
+            newCollapsedNodeIds.add(nodeId);
+          }
+        } else if (collapsed) {
+          newCollapsedNodeIds.add(nodeId);
+        } else {
+          newCollapsedNodeIds.delete(nodeId);
+        }
+
+        return { collapsedNodeIds: newCollapsedNodeIds };
+      }),
+
     toggleTableExpansion: (tableId) =>
       set((state) => {
         const newExpandedTableIds = new Set(state.expandedTableIds);
@@ -422,6 +450,24 @@ export function createLineageStore(
         } else {
           newExpandedTableIds.add(tableId);
         }
+        return { expandedTableIds: newExpandedTableIds };
+      }),
+
+    setTableExpanded: (tableId, expanded) =>
+      set((state) => {
+        const newExpandedTableIds = new Set(state.expandedTableIds);
+        const isExpanded = newExpandedTableIds.has(tableId);
+
+        if (isExpanded === expanded) {
+          return state;
+        }
+
+        if (expanded) {
+          newExpandedTableIds.add(tableId);
+        } else {
+          newExpandedTableIds.delete(tableId);
+        }
+
         return { expandedTableIds: newExpandedTableIds };
       }),
 
@@ -629,7 +675,9 @@ export function useLineage() {
       cycleOccurrence: store.cycleOccurrence,
       focusOccurrence: store.focusOccurrence,
       toggleNodeCollapse: store.toggleNodeCollapse,
+      setNodeCollapsed: store.setNodeCollapsed,
       toggleTableExpansion: store.toggleTableExpansion,
+      setTableExpanded: store.setTableExpanded,
       setAllNodesCollapsed: store.setAllNodesCollapsed,
       selectStatement: store.selectStatement,
       highlightSpan: store.highlightSpan,
@@ -731,7 +779,9 @@ export function useLineageActions() {
   const cycleOccurrence = useLineageStore((state) => state.cycleOccurrence);
   const focusOccurrence = useLineageStore((state) => state.focusOccurrence);
   const toggleNodeCollapse = useLineageStore((state) => state.toggleNodeCollapse);
+  const setNodeCollapsed = useLineageStore((state) => state.setNodeCollapsed);
   const toggleTableExpansion = useLineageStore((state) => state.toggleTableExpansion);
+  const setTableExpanded = useLineageStore((state) => state.setTableExpanded);
   const setAllNodesCollapsed = useLineageStore((state) => state.setAllNodesCollapsed);
   const selectStatement = useLineageStore((state) => state.selectStatement);
   const highlightSpan = useLineageStore((state) => state.highlightSpan);
@@ -764,7 +814,9 @@ export function useLineageActions() {
     cycleOccurrence,
     focusOccurrence,
     toggleNodeCollapse,
+    setNodeCollapsed,
     toggleTableExpansion,
+    setTableExpanded,
     setAllNodesCollapsed,
     selectStatement,
     highlightSpan,

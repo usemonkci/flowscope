@@ -169,8 +169,12 @@ export interface LineageActions {
   selectNode: (nodeId: string | null) => void;
   /** Toggle the collapsed state of a node */
   toggleNodeCollapse: (nodeId: string) => void;
+  /** Explicitly set whether a node is collapsed */
+  setNodeCollapsed: (nodeId: string, collapsed: boolean) => void;
   /** Toggle the expansion state of a table (show/hide all columns) */
   toggleTableExpansion: (tableId: string) => void;
+  /** Explicitly set whether a table is expanded to show all columns */
+  setTableExpanded: (tableId: string, expanded: boolean) => void;
   /** Set all nodes to collapsed or expanded state */
   setAllNodesCollapsed: (collapsed: boolean) => void;
   /** Select a statement by index */
@@ -415,6 +419,8 @@ export interface TableNodeData extends Record<string, unknown> {
   sourceName?: string;
   /** Number of columns hidden from resolvedSchema (0 if none) */
   hiddenColumnCount?: number;
+  /** Number of columns hidden in column-lineage mode because they have no visible lineage */
+  lineageHiddenColumnCount?: number;
   /** Filter predicates (WHERE/HAVING clauses) affecting this table */
   filters?: FilterPredicate[];
   /** Fully qualified name (e.g., "catalog.schema.table") */

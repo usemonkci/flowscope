@@ -657,6 +657,189 @@ describe('buildFlowEdges table consistency', () => {
   });
 });
 
+describe('column-lineage column filtering', () => {
+  function createWideSelectLineage(): TestStatement {
+    const wideColumns = Array.from({ length: 60 }, (_, index) => ({
+      id: `column:wide.c${index + 1}`,
+      type: 'column' as const,
+      label: `c${index + 1}`,
+      qualifiedName: `wide.c${index + 1}`,
+    }));
+    const outputColumns = ['c1', 'c2'].map((name) => ({
+      id: `column:output.${name}`,
+      type: 'column' as const,
+      label: name,
+    }));
+
+    return {
+      statementIndex: 0,
+      statementType: 'SELECT',
+      joinCount: 0,
+      complexityScore: 1,
+      nodes: [
+        { id: 'table:wide', type: 'table', label: 'wide', qualifiedName: 'wide' },
+        { id: 'output:1', type: 'output', label: 'Output' },
+        ...wideColumns,
+        ...outputColumns,
+      ],
+      edges: [
+        ...wideColumns.map((column) => ({
+          id: `own:${column.label}`,
+          from: 'table:wide',
+          to: column.id,
+          type: 'ownership' as const,
+        })),
+        ...outputColumns.map((column) => ({
+          id: `own:${column.label}:output`,
+          from: 'output:1',
+          to: column.id,
+          type: 'ownership' as const,
+        })),
+        {
+          id: 'flow:c1',
+          from: 'column:wide.c1',
+          to: 'column:output.c1',
+          type: 'data_flow' as const,
+        },
+        {
+          id: 'flow:c2',
+          from: 'column:wide.c2',
+          to: 'column:output.c2',
+          type: 'data_flow' as const,
+        },
+      ],
+    };
+  }
+
+  it('shows only connected columns for wide tables in column-lineage mode', () => {
+    const statement = createWideSelectLineage();
+
+    const merged = mergedFrom([statement]);
+    const tableModeNodes = buildFlowNodes(merged, null, '', new Set<string>(), new Set<string>());
+    const columnModeNodes = buildFlowNodes(
+      merged,
+      null,
+      '',
+      new Set<string>(),
+      new Set<string>(),
+      null,
+      false,
+      true
+    );
+
+    const tableModeWide = tableModeNodes.find((node) => node.id === 'table:wide');
+    const columnModeWide = columnModeNodes.find((node) => node.id === 'table:wide');
+
+    expect(tableModeWide?.data.columns).toHaveLength(60);
+    expect(tableModeWide?.data.lineageHiddenColumnCount).toBeFalsy();
+
+    expect(columnModeWide?.data.columns.map((column) => column.name)).toEqual(['c1', 'c2']);
+    expect(columnModeWide?.data.lineageHiddenColumnCount).toBe(58);
+  });
+
+  it('keeps the selected hidden column visible so column selection still has an anchor', () => {
+    const merged = mergedFrom([createWideSelectLineage()]);
+    const nodes = buildFlowNodes(
+      merged,
+      'column:wide.c60',
+      '',
+      new Set<string>(),
+      new Set<string>(),
+      null,
+      false,
+      true
+    );
+
+    const wideNode = nodes.find((node) => node.id === 'table:wide');
+
+    expect(wideNode?.data.columns.map((column) => column.name)).toEqual(['c1', 'c2', 'c60']);
+    expect(wideNode?.data.lineageHiddenColumnCount).toBe(57);
+  });
+
+  it('keeps search-matching hidden columns visible so focus/search can still target them', () => {
+    const merged = mergedFrom([createWideSelectLineage()]);
+    const nodes = buildFlowNodes(
+      merged,
+      null,
+      'c60',
+      new Set<string>(),
+      new Set<string>(),
+      null,
+      false,
+      true
+    );
+
+    const wideNode = nodes.find((node) => node.id === 'table:wide');
+
+    expect(wideNode?.data.columns.map((column) => column.name)).toEqual(['c1', 'c2', 'c60']);
+    expect(wideNode?.data.lineageHiddenColumnCount).toBe(57);
+  });
+
+  it('drops wide-table columns when their only lineage connection collapses to a table edge', () => {
+    const sourceColumns = Array.from({ length: 60 }, (_, index) => ({
+      id: `column:source.c${index + 1}`,
+      type: 'column' as const,
+      label: `c${index + 1}`,
+      qualifiedName: `source.c${index + 1}`,
+    }));
+    const targetColumns = Array.from({ length: 60 }, (_, index) => ({
+      id: `column:target.c${index + 1}`,
+      type: 'column' as const,
+      label: `c${index + 1}`,
+      qualifiedName: `target.c${index + 1}`,
+    }));
+
+    const statement: TestStatement = {
+      statementIndex: 0,
+      statementType: 'CREATE_VIEW',
+      joinCount: 0,
+      complexityScore: 1,
+      nodes: [
+        { id: 'table:source', type: 'table', label: 'source', qualifiedName: 'source' },
+        { id: 'table:target', type: 'table', label: 'target', qualifiedName: 'target' },
+        ...sourceColumns,
+        ...targetColumns,
+      ],
+      edges: [
+        ...sourceColumns.map((column) => ({
+          id: `own:source:${column.label}`,
+          from: 'table:source',
+          to: column.id,
+          type: 'ownership' as const,
+        })),
+        ...targetColumns.map((column) => ({
+          id: `own:target:${column.label}`,
+          from: 'table:target',
+          to: column.id,
+          type: 'ownership' as const,
+        })),
+        {
+          id: 'flow:c1',
+          from: 'column:source.c1',
+          to: 'column:target.c1',
+          type: 'data_flow' as const,
+        },
+      ],
+    };
+
+    const nodes = buildFlowNodes(
+      mergedFrom([statement]),
+      null,
+      '',
+      new Set<string>(['table:target']),
+      new Set<string>(),
+      null,
+      false,
+      true
+    );
+
+    const sourceNode = nodes.find((node) => node.id === 'table:source');
+
+    expect(sourceNode?.data.columns).toEqual([]);
+    expect(sourceNode?.data.lineageHiddenColumnCount).toBe(60);
+  });
+});
+
 describe('graphBuilders DML handling', () => {
   it('renders INSERT lineage into the real target even with unqualified columns present', () => {
     const statement = createInsertLineage();

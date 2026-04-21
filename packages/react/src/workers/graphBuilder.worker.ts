@@ -30,6 +30,11 @@ import {
   withStatementScope,
 } from '../utils/lineageHelpers';
 import { mergeNodesForNavigation, scopeNodeToStatement } from '../utils/nodeOccurrences';
+import {
+  buildConnectedColumnIdSet,
+  filterColumnsForColumnLineage,
+  EMPTY_CONNECTED_COLUMN_IDS,
+} from '../utils/columnLineageFilter';
 
 // =============================================================================
 // Types for worker communication (all serializable - no Sets, no functions)
@@ -62,6 +67,7 @@ export interface SerializedTableNodeData extends Record<string, unknown> {
   isBaseTable?: boolean;
   sourceName?: string;
   hiddenColumnCount?: number;
+  lineageHiddenColumnCount?: number;
   filters?: FilterPredicate[];
   qualifiedName?: string;
   schema?: string;
@@ -344,6 +350,13 @@ interface NodeBuilderOptions {
   selectedNodeId: string | null;
   searchTerm: string;
   isCollapsed: boolean;
+  lineageHiddenColumnCount?: number;
+  /**
+   * Columns used for the search-highlight check. Separate from the display
+   * columns because column-lineage mode may prune those; search should still
+   * match against the full set.
+   */
+  highlightColumns?: SerializedColumnInfo[];
 }
 
 interface TableNodeBuilderOptions extends NodeBuilderOptions {
@@ -379,9 +392,14 @@ function buildTableNodeData(
     nodeType,
     columns,
     isSelected: node.id === options.selectedNodeId,
-    isHighlighted: isNodeHighlighted(options.searchTerm, columns, node.label),
+    isHighlighted: isNodeHighlighted(
+      options.searchTerm,
+      options.highlightColumns ?? columns,
+      node.label
+    ),
     isCollapsed: options.isCollapsed,
     hiddenColumnCount: options.hiddenColumnCount,
+    lineageHiddenColumnCount: options.lineageHiddenColumnCount,
     isRecursive: options.isRecursive,
     isBaseTable: options.isBaseTable,
     filters: node.filters,
@@ -405,8 +423,13 @@ function buildOutputNodeData(
     nodeType: 'virtualOutput',
     columns: outputColumns,
     isSelected: nodeId === options.selectedNodeId,
-    isHighlighted: isNodeHighlighted(options.searchTerm, outputColumns, label),
+    isHighlighted: isNodeHighlighted(
+      options.searchTerm,
+      options.highlightColumns ?? outputColumns,
+      label
+    ),
     isCollapsed: options.isCollapsed,
+    lineageHiddenColumnCount: options.lineageHiddenColumnCount,
   };
 }
 
@@ -420,7 +443,8 @@ function buildFlowNodes(
   collapsedNodeIds: Set<string>,
   expandedTableIds: Set<string>,
   resolvedSchema: ResolvedSchemaMetadata | null | undefined,
-  defaultCollapsed: boolean
+  defaultCollapsed: boolean,
+  showColumnEdges: boolean
 ): SerializedFlowNode[] {
   const tableNodes = merged.nodes.filter((n) => isTableLikeType(n.type));
   const columnNodes = merged.nodes.filter((n) => n.type === 'column');
@@ -443,6 +467,17 @@ function buildFlowNodes(
   const recursiveNodeIds = new Set(
     merged.edges.filter((e) => e.type === 'data_flow' && e.from === e.to).map((e) => e.from)
   );
+  const isRelationCollapsed = (relationId: string) =>
+    computeIsCollapsed(relationId, defaultCollapsed, collapsedNodeIds);
+  // Only scan edges when column-lineage mode will actually consume the result.
+  const connectedColumnIds = showColumnEdges
+    ? buildConnectedColumnIdSet(merged, tableNodes, outputNodes, columnNodes, isRelationCollapsed)
+    : EMPTY_CONNECTED_COLUMN_IDS;
+  const columnFilterOptions = {
+    showColumnEdges,
+    selectedColumnId: selectedNodeId,
+    searchTerm,
+  };
 
   const tableColumnMap = new Map<string, SerializedColumnInfo[]>();
   const ownedColumnIds = new Set<string>();
@@ -486,18 +521,26 @@ function buildFlowNodes(
       isExpanded,
       resolvedSchema
     );
+    const {
+      columns: displayColumns,
+      lineageHiddenColumnCount,
+    } = filterColumnsForColumnLineage(columns, connectedColumnIds, columnFilterOptions);
 
     flowNodes.push({
       id: node.id,
       type: 'tableNode',
       position: { x: 0, y: 0 },
-      data: buildTableNodeData(node, columns, {
+      data: buildTableNodeData(node, displayColumns, {
         selectedNodeId,
         searchTerm,
         isCollapsed: computeIsCollapsed(node.id, defaultCollapsed, collapsedNodeIds),
         hiddenColumnCount,
+        lineageHiddenColumnCount,
         isRecursive: recursiveNodeIds.has(node.id),
         isBaseTable: baseTableIds.has(node.id),
+        // Search over the unfiltered column list so lineage-filtered rows
+        // still contribute to node highlighting.
+        highlightColumns: columns,
       }),
     });
   }
@@ -513,44 +556,57 @@ function buildFlowNodes(
 
   if (isSelect) {
     outputNodes.forEach((outputNode) => {
+      const outputColumns = outputColumnsByNodeId.get(outputNode.id) || [];
+      const {
+        columns: displayColumns,
+        lineageHiddenColumnCount,
+      } = filterColumnsForColumnLineage(
+        outputColumns,
+        connectedColumnIds,
+        columnFilterOptions
+      );
+
       flowNodes.push({
         id: outputNode.id,
         type: 'tableNode',
         position: { x: 0, y: 0 },
-        data: buildOutputNodeData(
-          outputNode.id,
-          outputNode.label,
-          outputColumnsByNodeId.get(outputNode.id) || [],
-          {
-            selectedNodeId,
-            searchTerm,
-            isCollapsed: computeIsCollapsed(outputNode.id, defaultCollapsed, collapsedNodeIds),
-          }
-        ),
+        data: buildOutputNodeData(outputNode.id, outputNode.label, displayColumns, {
+          selectedNodeId,
+          searchTerm,
+          isCollapsed: computeIsCollapsed(outputNode.id, defaultCollapsed, collapsedNodeIds),
+          lineageHiddenColumnCount,
+          highlightColumns: outputColumns,
+        }),
       });
     });
 
     const virtualOutputColumns =
       outputColumnsByNodeId.get(GRAPH_CONFIG.VIRTUAL_OUTPUT_NODE_ID) || [];
     if (virtualOutputColumns.length > 0) {
+      const {
+        columns: displayColumns,
+        lineageHiddenColumnCount,
+      } = filterColumnsForColumnLineage(
+        virtualOutputColumns,
+        connectedColumnIds,
+        columnFilterOptions
+      );
+
       flowNodes.push({
         id: GRAPH_CONFIG.VIRTUAL_OUTPUT_NODE_ID,
         type: 'tableNode',
         position: { x: 0, y: 0 },
-        data: buildOutputNodeData(
-          GRAPH_CONFIG.VIRTUAL_OUTPUT_NODE_ID,
-          'Output',
-          virtualOutputColumns,
-          {
-            selectedNodeId,
-            searchTerm,
-            isCollapsed: computeIsCollapsed(
-              GRAPH_CONFIG.VIRTUAL_OUTPUT_NODE_ID,
-              defaultCollapsed,
-              collapsedNodeIds
-            ),
-          }
-        ),
+        data: buildOutputNodeData(GRAPH_CONFIG.VIRTUAL_OUTPUT_NODE_ID, 'Output', displayColumns, {
+          selectedNodeId,
+          searchTerm,
+          isCollapsed: computeIsCollapsed(
+            GRAPH_CONFIG.VIRTUAL_OUTPUT_NODE_ID,
+            defaultCollapsed,
+            collapsedNodeIds
+          ),
+          lineageHiddenColumnCount,
+          highlightColumns: virtualOutputColumns,
+        }),
       });
     }
   }
@@ -1157,7 +1213,8 @@ self.onmessage = (event: MessageEvent<GraphBuildRequest | ScriptGraphBuildReques
         collapsedNodeIds,
         expandedTableIds,
         request.resolvedSchema,
-        request.defaultCollapsed
+        request.defaultCollapsed,
+        request.showColumnEdges
       );
 
       edges = buildFlowEdges(

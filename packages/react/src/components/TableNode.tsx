@@ -10,9 +10,16 @@ import { useColors, useIsDarkMode } from '../hooks/useColors';
 import { OccurrenceCycler } from './OccurrenceCycler';
 import type { AggregationInfo } from '@pondpilot/flowscope-core';
 
-// Virtualization thresholds
-const COLUMN_VIRTUALIZATION_THRESHOLD = 20;
+// Column lists switch to react-window virtualization above this size. The
+// threshold is tuned so typical schemas (dozens of columns) render plainly —
+// virtualization adds fixed-height constraints and measurement overhead that
+// only pay off on genuinely large tables.
+const COLUMN_VIRTUALIZATION_THRESHOLD = 200;
 const COLUMN_ROW_HEIGHT = 24;
+// React Flow captures wheel and drag gestures by default. Mark column lists as
+// local scroll/interaction regions so large schemas can scroll without zooming
+// the canvas or dragging the node itself.
+const COLUMN_LIST_INTERACTION_CLASS_NAME = 'nodrag nopan nowheel custom-scrollbar';
 
 interface AggregationIndicatorProps {
   aggregation?: AggregationInfo;
@@ -244,7 +251,8 @@ function getNodeHeaderLabel(nodeData: TableNodeData, isVirtualOutput: boolean): 
 }
 
 function TableNodeComponent({ id, data, selected }: NodeProps): JSX.Element {
-  const { toggleNodeCollapse, toggleTableExpansion, selectNode } = useLineageActions();
+  const { toggleNodeCollapse, setNodeCollapsed, setTableExpanded, selectNode } =
+    useLineageActions();
   // Use derived selector to avoid new Set reference on each render
   const isExpanded = useLineageStore((state) => state.expandedTableIds.has(id));
   const showColumnEdges = useLineageStore((state) => state.showColumnEdges);
@@ -267,6 +275,35 @@ function TableNodeComponent({ id, data, selected }: NodeProps): JSX.Element {
   const isCollapsed = nodeData.isCollapsed;
   // isExpanded is now derived directly from the store selector above
   const hiddenColumnCount = nodeData.hiddenColumnCount || 0;
+  const lineageHiddenColumnCount = nodeData.lineageHiddenColumnCount || 0;
+  const useScrollableColumnList = !showColumnEdges;
+  const shouldVirtualizeColumns =
+    useScrollableColumnList && nodeData.columns.length >= COLUMN_VIRTUALIZATION_THRESHOLD;
+
+  const handleHiddenColumnsBadgeClick = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation();
+
+      if (isCollapsed || !isExpanded) {
+        setNodeCollapsed(id, false);
+        setTableExpanded(id, true);
+      } else {
+        setTableExpanded(id, false);
+      }
+    },
+    [id, isCollapsed, isExpanded, setNodeCollapsed, setTableExpanded]
+  );
+
+  const handleLineageHiddenBadgeClick = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation();
+
+      if (isCollapsed) {
+        setNodeCollapsed(id, false);
+      }
+    },
+    [id, isCollapsed, setNodeCollapsed]
+  );
 
   type NodePalette = {
     bg: string;
@@ -467,12 +504,14 @@ function TableNodeComponent({ id, data, selected }: NodeProps): JSX.Element {
           </span>
         )}
 
-        {hiddenColumnCount > 0 && (
+        {/* The schema-expand badge is suppressed in column-lineage mode: the
+         * lineage-hidden badge below already communicates which columns are
+         * hidden, and clicking the schema-expand action would not reveal them
+         * because lineage filtering still applies. */}
+        {!showColumnEdges && hiddenColumnCount > 0 && (
           <button
-            onClick={(e) => {
-              e.stopPropagation();
-              toggleTableExpansion(id);
-            }}
+            type="button"
+            onClick={handleHiddenColumnsBadgeClick}
             style={{
               display: 'inline-flex',
               alignItems: 'center',
@@ -503,6 +542,50 @@ function TableNodeComponent({ id, data, selected }: NodeProps): JSX.Element {
             {isExpanded ? `−${hiddenColumnCount}` : `+${hiddenColumnCount}`}
           </button>
         )}
+
+        {showColumnEdges &&
+          lineageHiddenColumnCount > 0 &&
+          (isCollapsed ? (
+            // Actionable: clicking expands the collapsed node so the user can
+            // see at least the connected columns.
+            <button
+              type="button"
+              onClick={handleLineageHiddenBadgeClick}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                backgroundColor: `${palette.textSecondary}15`,
+                color: palette.textSecondary,
+                borderRadius: 999,
+                padding: '4px 8px',
+                fontSize: 10,
+                fontWeight: 600,
+                border: 'none',
+                cursor: 'pointer',
+              }}
+              title={`${lineageHiddenColumnCount} column${lineageHiddenColumnCount !== 1 ? 's are' : ' is'} hidden because they have no lineage connection. Click to expand.`}
+            >
+              +{lineageHiddenColumnCount} hidden
+            </button>
+          ) : (
+            // Read-only indicator — there is nothing meaningful to click once
+            // the node is already expanded, so avoid the button affordance.
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                backgroundColor: `${palette.textSecondary}15`,
+                color: palette.textSecondary,
+                borderRadius: 999,
+                padding: '4px 8px',
+                fontSize: 10,
+                fontWeight: 600,
+              }}
+              title={`${lineageHiddenColumnCount} column${lineageHiddenColumnCount !== 1 ? 's are' : ' is'} hidden because they have no lineage connection.`}
+            >
+              +{lineageHiddenColumnCount} hidden
+            </span>
+          ))}
 
         {isRecursive && (
           <span
@@ -542,9 +625,10 @@ function TableNodeComponent({ id, data, selected }: NodeProps): JSX.Element {
 
       {!isCollapsed && nodeData.columns.length > 0 && (
         <div style={{ padding: '6px 12px', position: 'relative' }}>
-          {nodeData.columns.length >= COLUMN_VIRTUALIZATION_THRESHOLD ? (
+          {shouldVirtualizeColumns ? (
             // Virtualized list for large column counts
             <List
+              className={COLUMN_LIST_INTERACTION_CLASS_NAME}
               style={{
                 height: Math.min(
                   nodeData.columns.length * COLUMN_ROW_HEIGHT,
@@ -564,10 +648,27 @@ function TableNodeComponent({ id, data, selected }: NodeProps): JSX.Element {
               }}
               overscanCount={5}
             />
+          ) : showColumnEdges ? (
+            // In column-lineage mode every column handle must remain visible.
+            // If we clip or scroll the list, React Flow still routes edges to
+            // offscreen handles, which creates long "hanging" connections.
+            <div className="nodrag nopan">
+              {nodeData.columns.map((col: ColumnNodeInfo) => (
+                <ColumnRow
+                  key={col.id}
+                  col={col}
+                  showColumnEdges={showColumnEdges}
+                  onSelectColumn={selectNode}
+                  colors={colors}
+                  textSecondary={palette.textSecondary}
+                />
+              ))}
+            </div>
           ) : (
             // Regular rendering for small column counts (avoid virtualization overhead)
             // maxHeight ensures consistent behavior with virtualized list
             <div
+              className={COLUMN_LIST_INTERACTION_CLASS_NAME}
               style={{
                 maxHeight: GRAPH_CONFIG.MAX_COLUMN_HEIGHT,
                 overflowY: 'auto',
@@ -665,7 +766,7 @@ function TableNodeComponent({ id, data, selected }: NodeProps): JSX.Element {
  * Properties currently checked:
  * - Node identity: id, selected
  * - Visual state: isCollapsed, isSelected, isHighlighted, isRecursive, isBaseTable
- * - Display data: label, nodeType, schema, database, hiddenColumnCount
+ * - Display data: label, nodeType, schema, database, hiddenColumnCount, lineageHiddenColumnCount
  * - Columns: id, name, isHighlighted (for each column)
  * - Filters: expression (for each filter)
  */
@@ -691,6 +792,7 @@ export const TableNode = memo(TableNodeComponent, (prev, next) => {
   if (prevData.isRecursive !== nextData.isRecursive) return false;
   if (prevData.isBaseTable !== nextData.isBaseTable) return false;
   if (prevData.hiddenColumnCount !== nextData.hiddenColumnCount) return false;
+  if (prevData.lineageHiddenColumnCount !== nextData.lineageHiddenColumnCount) return false;
 
   // Check columns array
   if (prevData.columns.length !== nextData.columns.length) return false;
