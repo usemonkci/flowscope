@@ -1525,30 +1525,32 @@ GROUP BY customer_id
         "Should have cross-statement edges linking stg_orders to orders_summary"
     );
 
-    // The first statement's output should be labeled with the model name
+    // The first statement's sink should be materialized as the model's
+    // canonical Table node (issue #32) so it unifies with consumer
+    // references.
     let first_stmt = result
         .statements
         .first()
         .expect("Should have first statement");
-    let output_node = result
+    let sink_node = result
         .nodes_in_statement(first_stmt.statement_index)
-        .find(|n| n.node_type == NodeType::Output);
+        .find(|n| n.node_type.is_table_like() && n.label.as_ref() == "stg_orders");
 
     assert!(
-        output_node.is_some(),
-        "First statement should have an output node"
+        sink_node.is_some(),
+        "First statement should have a table sink for the dbt model"
     );
 
-    let output = output_node.unwrap();
+    let sink = sink_node.unwrap();
     assert_eq!(
-        output.label.as_ref(),
-        "stg_orders",
-        "Output node label should be the model name"
+        sink.node_type,
+        NodeType::Table,
+        "dbt model sink should be materialized as a Table, not an Output"
     );
     assert_eq!(
-        output.qualified_name.as_ref().map(|s| s.as_ref()),
+        sink.qualified_name.as_ref().map(|s| s.as_ref()),
         Some("stg_orders"),
-        "Output node qualified_name should be the model name"
+        "Model sink qualified_name should be the model name"
     );
 }
 
@@ -1611,19 +1613,28 @@ FROM scoped_data
         "dbt model-local CTEs should remain statement-local"
     );
 
-    let output_labels: Vec<_> = result
+    // Each dbt model's sink is materialized as a Table node labeled with the
+    // model name (see issue #32).
+    let sink_labels: Vec<_> = result
         .statements
         .iter()
         .filter_map(|statement| {
             result
                 .nodes_in_statement(statement.statement_index)
-                .find(|node| node.node_type == NodeType::Output)
+                .find(|node| {
+                    node.node_type.is_table_like()
+                        && node
+                            .qualified_name
+                            .as_ref()
+                            .map(|q| q.as_ref() == node.label.as_ref())
+                            .unwrap_or(false)
+                })
                 .map(|node| node.label.to_string())
         })
         .collect();
 
     assert_eq!(
-        output_labels,
+        sink_labels,
         vec!["customers".to_string(), "orders".to_string()]
     );
 }
@@ -1737,16 +1748,161 @@ fn dbt_model_name_extraction_from_path() {
         content: model.to_string(),
     }]);
 
-    let output_node = result.statements.first().and_then(|s| {
+    // The model sink is now a Table node keyed by the extracted model name
+    // (issue #32).
+    let sink_node = result.statements.first().and_then(|s| {
         result
             .nodes_in_statement(s.statement_index)
-            .find(|n| n.node_type == NodeType::Output)
+            .find(|n| n.node_type.is_table_like() && n.label.as_ref() == "stg_customers")
     });
 
-    assert!(output_node.is_some(), "Should have output node");
+    assert!(sink_node.is_some(), "Should have model sink node");
     assert_eq!(
-        output_node.unwrap().label.as_ref(),
+        sink_node.unwrap().label.as_ref(),
         "stg_customers",
         "Should extract 'stg_customers' from 'models/staging/stg_customers.sql'"
+    );
+}
+
+#[test]
+#[cfg(feature = "templating")]
+fn dbt_chained_models_unify_producer_and_consumer_nodes() {
+    // Regression test for https://github.com/pondpilot/flowscope/issues/32.
+    //
+    // Each dbt .sql file is a model that materializes a table with the same name as
+    // the file. A downstream file references that table via `{{ ref(...) }}`. In the
+    // lineage graph the producing model and every `ref()` consumer must collapse
+    // into a single node for that table, so multi-hop chains (A -> B -> C) render
+    // as a single connected lineage rather than three disconnected fragments.
+    let stg_supplies = "select id, name, price from {{ source('raw', 'supplies') }}";
+    let int_supplies = "select id, upper(name) as name, price from {{ ref('stg_supplies') }}";
+    let fct_supplies =
+        "select id, name, price * 1.1 as price_with_tax from {{ ref('int_supplies') }}";
+
+    let result = analyze_dbt_files(vec![
+        FileSource {
+            name: "models/stg_supplies.sql".to_string(),
+            content: stg_supplies.to_string(),
+        },
+        FileSource {
+            name: "models/int_supplies.sql".to_string(),
+            content: int_supplies.to_string(),
+        },
+        FileSource {
+            name: "models/fct_supplies.sql".to_string(),
+            content: fct_supplies.to_string(),
+        },
+    ]);
+
+    assert!(
+        !result.summary.has_errors,
+        "dbt chain analysis should succeed: {:?}",
+        result.issues
+    );
+
+    // Each model name must appear as exactly one table-like node in the merged
+    // graph. Before the fix, the producer emitted an `Output` node and the
+    // consumer emitted a separate `Table` node with the same canonical name,
+    // so each model name collided into two distinct nodes.
+    for model in ["stg_supplies", "int_supplies", "fct_supplies"] {
+        let table_like_nodes: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| {
+                n.node_type.is_table_like()
+                    && n.canonical_name
+                        .as_ref()
+                        .map(|c| c.name.as_str() == model)
+                        .unwrap_or(false)
+            })
+            .collect();
+        assert_eq!(
+            table_like_nodes.len(),
+            1,
+            "model '{model}' should have exactly one unified table node, found {}: {:?}",
+            table_like_nodes.len(),
+            table_like_nodes
+        );
+
+        // The unified node should also not coexist with a dangling Output node
+        // labeled with the same model name.
+        let stray_output = result
+            .nodes
+            .iter()
+            .find(|n| n.node_type == NodeType::Output && n.label.as_ref() == model);
+        assert!(
+            stray_output.is_none(),
+            "model '{model}' should not have a leftover Output-typed node: {:?}",
+            stray_output
+        );
+    }
+
+    // The producer statement and the consumer statement must both reference the
+    // unified node — that's how downstream tools (mermaid export, column
+    // lineage, etc.) know A feeds B.
+    let stg_node = result
+        .nodes
+        .iter()
+        .find(|n| {
+            n.node_type.is_table_like()
+                && n.canonical_name
+                    .as_ref()
+                    .map(|c| c.name.as_str() == "stg_supplies")
+                    .unwrap_or(false)
+        })
+        .expect("stg_supplies unified node should exist");
+    assert!(
+        stg_node.statement_ids.contains(&0) && stg_node.statement_ids.contains(&1),
+        "unified stg_supplies node should be referenced by both producer (stmt 0) and \
+         consumer (stmt 1): statement_ids = {:?}",
+        stg_node.statement_ids
+    );
+
+    // A multi-hop cross-statement edge chain must exist: a cross-statement edge
+    // linking the producer of each model to its consumer.
+    let cross_edges: Vec<_> = result
+        .edges
+        .iter()
+        .filter(|e| e.edge_type == EdgeType::CrossStatement)
+        .collect();
+    // stg produced by 0 -> consumed by 1; int produced by 1 -> consumed by 2.
+    let has_stg_edge = cross_edges
+        .iter()
+        .any(|e| e.statement_ids == vec![0usize, 1usize]);
+    let has_int_edge = cross_edges
+        .iter()
+        .any(|e| e.statement_ids == vec![1usize, 2usize]);
+    assert!(
+        has_stg_edge && has_int_edge,
+        "should have cross-statement edges for stg (0->1) and int (1->2), got {:?}",
+        cross_edges
+            .iter()
+            .map(|e| &e.statement_ids)
+            .collect::<Vec<_>>()
+    );
+
+    // Table-level DataFlow edges should connect the models, matching the
+    // arrows produced by CTAS (`CREATE TABLE x AS SELECT ... FROM y`). Without
+    // these, the mermaid table view would show disconnected boxes even though
+    // the nodes unify correctly.
+    let int_node_id = result
+        .nodes
+        .iter()
+        .find(|n| {
+            n.node_type.is_table_like()
+                && n.canonical_name
+                    .as_ref()
+                    .map(|c| c.name.as_str() == "int_supplies")
+                    .unwrap_or(false)
+        })
+        .map(|n| n.id.clone())
+        .expect("int_supplies unified node should exist");
+    let has_stg_to_int = result
+        .edges
+        .iter()
+        .any(|e| e.edge_type == EdgeType::DataFlow && e.from == stg_node.id && e.to == int_node_id);
+    assert!(
+        has_stg_to_int,
+        "should have a DataFlow edge stg_supplies -> int_supplies at the table level"
     );
 }

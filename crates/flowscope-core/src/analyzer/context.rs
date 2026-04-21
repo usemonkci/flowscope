@@ -445,6 +445,40 @@ impl StatementContext {
         node_id
     }
 
+    /// Creates or returns the sink node for a dbt model's bare SELECT.
+    ///
+    /// Unlike `ensure_output_node_with_model`, which synthesizes a
+    /// statement-scoped `Output` node, this materializes the sink as a
+    /// relation node (`Table`/`View`) whose id is the canonical relation id
+    /// shared with consumers. When another dbt model references this one via
+    /// `FROM {{ ref(...) }}`, its `Table` node resolves to the same canonical
+    /// id, so the flattener merges producer and consumer into a single graph
+    /// node and multi-hop `A -> B -> C` chains render as one connected
+    /// lineage rather than disconnected per-file fragments.
+    pub(crate) fn ensure_model_relation_sink(
+        &mut self,
+        model_name: &str,
+        canonical_id: Arc<str>,
+        node_type: NodeType,
+    ) -> Arc<str> {
+        if let Some(existing) = self.output_node_id.as_ref() {
+            return existing.clone();
+        }
+
+        let label: Arc<str> = Arc::from(model_name);
+        let sink_node = Node {
+            id: canonical_id.clone(),
+            node_type,
+            label: label.clone(),
+            qualified_name: Some(label),
+            ..Default::default()
+        };
+
+        self.add_node(sink_node);
+        self.output_node_id = Some(canonical_id.clone());
+        canonical_id
+    }
+
     pub(crate) fn output_node_id(&self) -> Option<&Arc<str>> {
         self.output_node_id.as_ref()
     }

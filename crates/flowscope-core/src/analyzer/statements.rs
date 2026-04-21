@@ -66,14 +66,23 @@ impl<'a> Analyzer<'a> {
                 // Normalize the model name to match how table references are normalized
                 // (e.g., Snowflake normalizes to uppercase)
                 let normalized_model_name = model_name.map(|n| self.normalize_table_name(n));
-                ctx.ensure_output_node_with_model(normalized_model_name.as_deref());
 
-                // Register the model as a produced table for cross-statement linking
-                if let Some(ref name) = normalized_model_name {
+                let sink_target_id = if let Some(ref name) = normalized_model_name {
+                    // Register the model as a produced table so downstream files
+                    // that reference it via `ref(...)` see a known relation.
                     self.tracker.record_produced(name, index);
-                }
+                    // Materialize the sink as the canonical relation node so it
+                    // unifies with consumer FROM references sharing the same
+                    // canonical name (see issue #32).
+                    let (canonical_id, node_type) = self.tracker.relation_identity(name);
+                    let sink_id = ctx.ensure_model_relation_sink(name, canonical_id, node_type);
+                    Some(sink_id.to_string())
+                } else {
+                    ctx.ensure_output_node_with_model(None);
+                    None
+                };
 
-                self.analyze_query(&mut ctx, query, None);
+                self.analyze_query(&mut ctx, query, sink_target_id.as_deref());
                 classify_query_type(query)
             }
             Statement::Insert(insert) => {
