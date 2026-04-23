@@ -21,6 +21,7 @@
 //! for your target dialect first.
 
 mod csv;
+pub mod dali_compat;
 mod error;
 mod extract;
 mod html;
