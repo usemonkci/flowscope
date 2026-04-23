@@ -13,6 +13,28 @@ expression: clean_result
   ],
   "nodes": [
     {
+      "id": "column_11fa415539b7dba5",
+      "type": "column",
+      "label": "updated_at",
+      "canonicalName": {
+        "name": "updated_at"
+      },
+      "statementIds": [
+        0
+      ]
+    },
+    {
+      "id": "column_74c341704cf4e26f",
+      "type": "column",
+      "label": "status",
+      "canonicalName": {
+        "name": "status"
+      },
+      "statementIds": [
+        0
+      ]
+    },
+    {
       "id": "table_e500054d128e991c",
       "type": "table",
       "label": "customers",
@@ -74,13 +96,31 @@ expression: clean_result
       "statementIds": [
         0
       ]
+    },
+    {
+      "id": "edge_b508dc70429346a4",
+      "from": "table_eaa6ebb8f158751f",
+      "to": "column_74c341704cf4e26f",
+      "type": "ownership",
+      "statementIds": [
+        0
+      ]
+    },
+    {
+      "id": "edge_f14f4de07f83be24",
+      "from": "table_eaa6ebb8f158751f",
+      "to": "column_11fa415539b7dba5",
+      "type": "ownership",
+      "statementIds": [
+        0
+      ]
     }
   ],
   "issues": [],
   "summary": {
     "statementCount": 1,
     "tableCount": 2,
-    "columnCount": 0,
+    "columnCount": 2,
     "joinCount": 0,
     "complexityScore": 10,
     "issueCount": {

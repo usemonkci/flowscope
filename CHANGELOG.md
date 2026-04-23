@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 #### Core Engine (flowscope-core)
 - **dbt multi-model chains now render as connected lineage** ([#32](https://github.com/pondpilot/flowscope/issues/32)) — a dbt model's bare SELECT is materialized as the canonical Table node for the model name instead of a per-statement Output node, so when a downstream file references it via `{{ ref(...) }}` the producer and consumer collapse into a single graph node and multi-hop `A -> B -> C` pipelines show end-to-end.
 
+#### Export (flowscope-export)
+- **Oracle DML now exports cleanly in Dali-compatible lineage output** — the Dali adapter now recognizes ownership-only Oracle `UPDATE`, `DELETE`, and `MERGE` write targets, preserves source expressions in column refs, and caps backward traversal defensively on large graphs.
+
+#### CLI (flowscope-cli)
+- `--format dali` now requires SQL input and returns contextual export errors instead of silently emitting an empty package or panicking on JSON serialization failures.
+
 ## [0.6.0] - 2026-03-22
 
 ### Added
