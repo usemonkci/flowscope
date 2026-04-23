@@ -7,16 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-04-23
+
+### Added
+
+#### Core Engine (flowscope-core)
+- **Oracle dialect lineage** — full Oracle dialect support in the analyzer and lineage extractors, surfacing Oracle-specific pseudocolumns (`ROWID`, `ROWNUM`, `LEVEL`, `SYSDATE`, etc.) and DML write targets for `UPDATE`, `DELETE`, and `MERGE`
+- **SQL `COMMENT` descriptions on nodes** — inline and trailing SQL comments on table/column definitions are surfaced as node descriptions for display in downstream UIs
+- **`name_spans` and `body_span` on Node** ([#30](https://github.com/pondpilot/flowscope/issues/30)) — each node now carries the source spans of every occurrence of its name plus the span of its defining body, enabling graph↔text navigation in editors
+- **Flattened `AnalyzeResult`** ([#19](https://github.com/pondpilot/flowscope/issues/19), [#33](https://github.com/pondpilot/flowscope/pull/33)) — `nodes` and `edges` are now top-level fields on `AnalyzeResult` instead of nested under `graph`, simplifying consumer code. **Breaking change** for consumers that accessed `result.graph.nodes` / `result.graph.edges`.
+
+#### Export (flowscope-export)
+- **Dali-compatible output layer** — new `--format dali` export target for Dali lineage interop, with ownership-only DML target detection, source-expression-preserving column refs, and defensive backward-traversal caps on large graphs
+
+#### CLI (flowscope-cli)
+- `--format dali` export support; requires SQL input and returns contextual export errors instead of silently emitting empty packages or panicking on JSON serialization failures
+
+#### Web App (app/) & VS Code extension
+- **SQL IntelliSense in the editor** ([#26](https://github.com/pondpilot/flowscope/issues/26)) — context-aware completions (tables, columns, keywords, functions) in `SqlView` backed by the flowscope engine, with Tab-accept behavior that beats CodeMirror's `indentWithTab` binding
+- **VS Code `CompletionItemProvider`** ([#26](https://github.com/pondpilot/flowscope/issues/26)) — the VS Code extension now delivers the same flowscope-backed SQL completions inside VS Code
+- **Text→graph navigation** ([#24](https://github.com/pondpilot/flowscope/issues/24)) — clicking in the SQL editor reveals the corresponding lineage node in the graph
+- **Graph→text navigation** ([#31](https://github.com/pondpilot/flowscope/issues/31)) — clicking a graph node cycles through its occurrences in the SQL editor
+- **Stale-graph banner + Run-button rename** ([#21](https://github.com/pondpilot/flowscope/issues/21), [#22](https://github.com/pondpilot/flowscope/issues/22)) — the graph surfaces a banner when its data has drifted from the editor, and the Run button is renamed for clarity
+
 ### Fixed
 
 #### Core Engine (flowscope-core)
-- **dbt multi-model chains now render as connected lineage** ([#32](https://github.com/pondpilot/flowscope/issues/32)) — a dbt model's bare SELECT is materialized as the canonical Table node for the model name instead of a per-statement Output node, so when a downstream file references it via `{{ ref(...) }}` the producer and consumer collapse into a single graph node and multi-hop `A -> B -> C` pipelines show end-to-end.
+- **dbt multi-model chains now render as connected lineage** ([#32](https://github.com/pondpilot/flowscope/issues/32)) — a dbt model's bare `SELECT` is materialized as the canonical Table node for the model name instead of a per-statement Output node, so when a downstream file references it via `{{ ref(...) }}` the producer and consumer collapse into a single graph node and multi-hop `A → B → C` pipelines show end-to-end
+- **Ephemeral dbt models preserved through CTE hiding** — dbt model sinks are marked with a `dbtModelSink` flag so `hide_ctes` retains ephemeral models in the global graph, and definition occurrences are tracked separately so statement-scoped views surface the producer span before any consumer refs
+- **Ambiguous dbt model materialization surfaced** — duplicate model names across files now emit `SCHEMA_CONFLICT` with an unambiguous warning about definition vs. producer semantics
+- **dbt CTE and output-node collisions fixed** ([#15](https://github.com/pondpilot/flowscope/issues/15)) — explicit output nodes are included in script-level dependencies and edge IDs are now collision-safe via statement-scope metadata
+- **Column-lineage pruning refined** — tighter pruning rules eliminate spurious column edges without dropping legitimate lineage
+- **Stale analysis cache invalidated** — the web app's analysis cache sentinel is bumped to `v5` so pre-flatten `AnalyzeResult` entries no longer rehydrate into a slot where `result.nodes` is undefined
 
-#### Export (flowscope-export)
-- **Oracle DML now exports cleanly in Dali-compatible lineage output** — the Dali adapter now recognizes ownership-only Oracle `UPDATE`, `DELETE`, and `MERGE` write targets, preserves source expressions in column refs, and caps backward traversal defensively on large graphs.
+#### Web App (app/)
+- **Reveal targeting scoped to the active editor** — reveal lookups no longer cross editors in multi-file controlled setups, and reveal clears no longer trigger spurious navigation
 
-#### CLI (flowscope-cli)
-- `--format dali` now requires SQL input and returns contextual export errors instead of silently emitting an empty package or panicking on JSON serialization failures.
+### Changed
+
+#### Core Engine (flowscope-core)
+- Graph builders share output-node and edge helpers, reducing duplication between the script-level and statement-level paths
+- Span helpers are hardened against UTF-8 panics and relation span lookup is unified
+
+### Tests
+- Alias-shadowing coverage added for nested completion scopes
 
 ## [0.6.0] - 2026-03-22
 
