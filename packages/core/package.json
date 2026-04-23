@@ -19,6 +19,7 @@
   ],
   "scripts": {
     "build": "yarn build:wasm && tsc && yarn copy:wasm",
+    "build:no-wasm": "tsc && yarn copy:wasm",
     "build:wasm": "wasm-pack build ../../crates/flowscope-wasm --target web --out-dir ../../packages/core/wasm && node -e \"require('fs').writeFileSync('../../packages/core/wasm/.gitignore', '# Keep wasm artifacts available for publishing\\n')\"",
     "copy:wasm": "rm -rf dist/wasm && mkdir -p dist/wasm && cp -R wasm/* dist/wasm/",
     "prepublishOnly": "yarn build",

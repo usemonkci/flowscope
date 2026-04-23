@@ -166,8 +166,8 @@ jobs:
       - name: Install dependencies
         run: yarn install
 
-      - name: Build core package
-        run: yarn workspace @pondpilot/flowscope-core build
+      - name: Build core package (skip WASM rebuild)
+        run: yarn workspace @pondpilot/flowscope-core build:no-wasm
 
       - name: Build demo app
         run: yarn workspace @pondpilot/flowscope-app build
@@ -247,6 +247,12 @@ jobs:
 
       - name: Build app for embedding
         run: cd app && yarn build
+
+      - name: Sync app dist into CLI embed directory
+        run: |
+          rm -rf crates/flowscope-cli/embedded-app
+          mkdir -p crates/flowscope-cli/embedded-app
+          cp -R app/dist/. crates/flowscope-cli/embedded-app/
 
       - name: Build CLI with serve feature
         run: cargo build -p flowscope-cli --features serve --release
