@@ -200,7 +200,12 @@ jobs:
     runs-on: monkci-ubuntu-24.04-4
     steps:
       - uses: actions/checkout@v4
-
+      - name: Probe yarn
+        run: |
+          which yarn || echo "NO yarn on PATH"
+          ls -la /usr/local/bin/yarn || echo "no /usr/local/bin/yarn"
+          yarn --version || true
+          echo "PATH=$PATH"
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
