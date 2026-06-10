@@ -12,7 +12,7 @@ env:
 jobs:
   rust-test:
     name: Rust Tests
-    runs-on: monkci-ubuntu-24.04-4
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -46,7 +46,7 @@ jobs:
 
   cli-fix-perf:
     name: CLI Fix Perf Gate
-    runs-on: monkci-ubuntu-24.04-4
+    runs-on: ubuntu-latest
     env:
       CLI_FIX_PERF_BUDGET_MS: 5000
     steps:
@@ -112,7 +112,7 @@ jobs:
 
   wasm-build:
     name: WASM Build
-    runs-on: monkci-ubuntu-24.04-4
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -146,7 +146,7 @@ jobs:
 
   typescript-build:
     name: TypeScript Build
-    runs-on: monkci-ubuntu-24.04-4
+    runs-on: ubuntu-latest
     needs: wasm-build
     steps:
       - uses: actions/checkout@v4
@@ -174,7 +174,7 @@ jobs:
 
   schema-compat:
     name: Schema Compatibility (Rust ↔ TS)
-    runs-on: monkci-ubuntu-24.04-4
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -197,7 +197,7 @@ jobs:
 
   lint:
     name: Lint
-    runs-on: monkci-ubuntu-24.04-4
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Probe yarn
@@ -223,7 +223,7 @@ jobs:
 
   cli-serve:
     name: CLI Serve Mode
-    runs-on: monkci-ubuntu-24.04-4
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -267,7 +267,7 @@ jobs:
 
   coverage:
     name: Code Coverage
-    runs-on: monkci-ubuntu-24.04-4
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
