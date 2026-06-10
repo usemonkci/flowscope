@@ -156,7 +156,15 @@ jobs:
         with:
           node-version: '20'
           cache: 'yarn'
-
+      - name: debug rust/env
+        run: |
+          echo "PATH=$PATH"
+          echo "--- /etc/environment ---"; cat /etc/environment
+          echo "--- .path ---"; cat /home/runner/actions-runner/.path 2>/dev/null || echo "no .path"
+          echo "--- .env ---";  cat /home/runner/actions-runner/.env  2>/dev/null || echo "no .env"
+          ls -la /usr/share/rust/.cargo/bin 2>/dev/null || echo "rust bin not there"
+          command -v rustup || true
+      
       - name: Download WASM artifact
         uses: actions/download-artifact@v4
         with:
