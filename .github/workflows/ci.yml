@@ -1,10 +1,7 @@
 name: CI
 
 on:
-  push:
-    branches: [master]
-  pull_request:
-    branches: [master]
+  workflow_dispatch: 
 
 env:
   CARGO_TERM_COLOR: always
@@ -12,7 +9,7 @@ env:
 jobs:
   rust-test:
     name: Rust Tests
-    runs-on: ubuntu-latest
+    runs-on: monkci-ubuntu-24.04-4
     steps:
       - uses: actions/checkout@v4
 
@@ -46,7 +43,7 @@ jobs:
 
   cli-fix-perf:
     name: CLI Fix Perf Gate
-    runs-on: ubuntu-latest
+    runs-on: monkci-ubuntu-24.04-4
     env:
       CLI_FIX_PERF_BUDGET_MS: 5000
     steps:
@@ -112,7 +109,7 @@ jobs:
 
   wasm-build:
     name: WASM Build
-    runs-on: ubuntu-latest
+    runs-on: monkci-ubuntu-24.04-4
     steps:
       - uses: actions/checkout@v4
 
@@ -146,7 +143,7 @@ jobs:
 
   typescript-build:
     name: TypeScript Build
-    runs-on: ubuntu-latest
+    runs-on: monkci-ubuntu-24.04-4
     needs: wasm-build
     steps:
       - uses: actions/checkout@v4
@@ -182,7 +179,7 @@ jobs:
 
   schema-compat:
     name: Schema Compatibility (Rust ↔ TS)
-    runs-on: ubuntu-latest
+    runs-on: monkci-ubuntu-24.04-4
     steps:
       - uses: actions/checkout@v4
 
@@ -205,7 +202,7 @@ jobs:
 
   lint:
     name: Lint
-    runs-on: ubuntu-latest
+    runs-on: monkci-ubuntu-24.04-4
     steps:
       - uses: actions/checkout@v4
       - name: Probe yarn
@@ -231,7 +228,7 @@ jobs:
 
   cli-serve:
     name: CLI Serve Mode
-    runs-on: ubuntu-latest
+    runs-on: monkci-ubuntu-24.04-4
     steps:
       - uses: actions/checkout@v4
 
@@ -275,7 +272,7 @@ jobs:
 
   coverage:
     name: Code Coverage
-    runs-on: ubuntu-latest
+    runs-on: monkci-ubuntu-24.04-4
     steps:
       - uses: actions/checkout@v4
 
