@@ -16,6 +16,7 @@ jobs:
         run: |
           echo "PATH=$PATH"
           echo "--- /etc/environment ---"; cat /etc/environment
+          ls -lah /
           echo "--- .path ---"; cat /home/runner/actions-runner/.path 2>/dev/null || echo "no .path"
           echo "--- .env ---";  cat /home/runner/actions-runner/.env  2>/dev/null || echo "no .env"
           ls -la /usr/share/rust/.cargo/bin 2>/dev/null || echo "rust bin not there"
