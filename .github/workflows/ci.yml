@@ -12,11 +12,26 @@ jobs:
     runs-on: monkci-ubuntu-24.04-4
     steps:
       - uses: actions/checkout@v4
-
+      - name: debug rust/env
+        run: |
+          echo "PATH=$PATH"
+          echo "--- /etc/environment ---"; cat /etc/environment
+          echo "--- .path ---"; cat /home/runner/actions-runner/.path 2>/dev/null || echo "no .path"
+          echo "--- .env ---";  cat /home/runner/actions-runner/.env  2>/dev/null || echo "no .env"
+          ls -la /usr/share/rust/.cargo/bin 2>/dev/null || echo "rust bin not there"
+          command -v rustup || true
       - name: Install Rust
         uses: dtolnay/rust-toolchain@1.95.0
         with:
           targets: wasm32-unknown-unknown
+      - name: debug post rust/env
+        run: |
+          echo "PATH=$PATH"
+          echo "--- /etc/environment ---"; cat /etc/environment
+          echo "--- .path ---"; cat /home/runner/actions-runner/.path 2>/dev/null || echo "no .path"
+          echo "--- .env ---";  cat /home/runner/actions-runner/.env  2>/dev/null || echo "no .env"
+          ls -la /usr/share/rust/.cargo/bin 2>/dev/null || echo "rust bin not there"
+          command -v rustup || true
 
       - name: Cache Cargo
         uses: actions/cache@v4
@@ -28,6 +43,8 @@ jobs:
             ~/.cargo/git/db/
             target/
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      
 
       - name: Run Rust tests
         run: cargo test --workspace --locked
@@ -48,9 +65,24 @@ jobs:
       CLI_FIX_PERF_BUDGET_MS: 5000
     steps:
       - uses: actions/checkout@v4
-
+      - name: debug rust/env
+        run: |
+          echo "PATH=$PATH"
+          echo "--- /etc/environment ---"; cat /etc/environment
+          echo "--- .path ---"; cat /home/runner/actions-runner/.path 2>/dev/null || echo "no .path"
+          echo "--- .env ---";  cat /home/runner/actions-runner/.env  2>/dev/null || echo "no .env"
+          ls -la /usr/share/rust/.cargo/bin 2>/dev/null || echo "rust bin not there"
+          command -v rustup || true
       - name: Install Rust
         uses: dtolnay/rust-toolchain@1.95.0
+      - name: debug post rust/env
+        run: |
+          echo "PATH=$PATH"
+          echo "--- /etc/environment ---"; cat /etc/environment
+          echo "--- .path ---"; cat /home/runner/actions-runner/.path 2>/dev/null || echo "no .path"
+          echo "--- .env ---";  cat /home/runner/actions-runner/.env  2>/dev/null || echo "no .env"
+          ls -la /usr/share/rust/.cargo/bin 2>/dev/null || echo "rust bin not there"
+          command -v rustup || true
 
       - name: Cache Cargo
         uses: actions/cache@v4
@@ -62,6 +94,14 @@ jobs:
             ~/.cargo/git/db/
             target/
           key: ${{ runner.os }}-cargo-cli-fix-perf-${{ hashFiles('**/Cargo.lock') }}
+      - name: debug post cache cargo
+        run: |
+          echo "PATH=$PATH"
+          echo "--- /etc/environment ---"; cat /etc/environment
+          echo "--- .path ---"; cat /home/runner/actions-runner/.path 2>/dev/null || echo "no .path"
+          echo "--- .env ---";  cat /home/runner/actions-runner/.env  2>/dev/null || echo "no .env"
+          ls -la /usr/share/rust/.cargo/bin 2>/dev/null || echo "rust bin not there"
+          command -v rustup || true
 
       - name: Build CLI release binary
         run: cargo build -p flowscope-cli --release --locked
@@ -112,14 +152,38 @@ jobs:
     runs-on: monkci-ubuntu-24.04-4
     steps:
       - uses: actions/checkout@v4
+      - name: debug rust/env
+        run: |
+          echo "PATH=$PATH"
+          echo "--- /etc/environment ---"; cat /etc/environment
+          echo "--- .path ---"; cat /home/runner/actions-runner/.path 2>/dev/null || echo "no .path"
+          echo "--- .env ---";  cat /home/runner/actions-runner/.env  2>/dev/null || echo "no .env"
+          ls -la /usr/share/rust/.cargo/bin 2>/dev/null || echo "rust bin not there"
+          command -v rustup || true
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@1.95.0
         with:
           targets: wasm32-unknown-unknown
+      - name: debug post rust
+        run: |
+          echo "PATH=$PATH"
+          echo "--- /etc/environment ---"; cat /etc/environment
+          echo "--- .path ---"; cat /home/runner/actions-runner/.path 2>/dev/null || echo "no .path"
+          echo "--- .env ---";  cat /home/runner/actions-runner/.env  2>/dev/null || echo "no .env"
+          ls -la /usr/share/rust/.cargo/bin 2>/dev/null || echo "rust bin not there"
+          command -v rustup || true
 
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+      - name: debug wasm-pack
+        run: |
+          echo "PATH=$PATH"
+          echo "--- /etc/environment ---"; cat /etc/environment
+          echo "--- .path ---"; cat /home/runner/actions-runner/.path 2>/dev/null || echo "no .path"
+          echo "--- .env ---";  cat /home/runner/actions-runner/.env  2>/dev/null || echo "no .env"
+          ls -la /usr/share/rust/.cargo/bin 2>/dev/null || echo "rust bin not there"
+          command -v rustup || true
 
       - name: Cache Cargo
         uses: actions/cache@v4
@@ -131,6 +195,14 @@ jobs:
             ~/.cargo/git/db/
             target/
           key: ${{ runner.os }}-cargo-wasm-${{ hashFiles('**/Cargo.lock') }}
+      - name: debug cargo
+        run: |
+          echo "PATH=$PATH"
+          echo "--- /etc/environment ---"; cat /etc/environment
+          echo "--- .path ---"; cat /home/runner/actions-runner/.path 2>/dev/null || echo "no .path"
+          echo "--- .env ---";  cat /home/runner/actions-runner/.env  2>/dev/null || echo "no .env"
+          ls -la /usr/share/rust/.cargo/bin 2>/dev/null || echo "rust bin not there"
+          command -v rustup || true
 
       - name: Build WASM
         run: wasm-pack build crates/flowscope-wasm --target web --out-dir ../../packages/core/wasm
@@ -182,9 +254,25 @@ jobs:
     runs-on: monkci-ubuntu-24.04-4
     steps:
       - uses: actions/checkout@v4
+      - name: debug rust/env
+        run: |
+          echo "PATH=$PATH"
+          echo "--- /etc/environment ---"; cat /etc/environment
+          echo "--- .path ---"; cat /home/runner/actions-runner/.path 2>/dev/null || echo "no .path"
+          echo "--- .env ---";  cat /home/runner/actions-runner/.env  2>/dev/null || echo "no .env"
+          ls -la /usr/share/rust/.cargo/bin 2>/dev/null || echo "rust bin not there"
+          command -v rustup || true
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@1.95.0
+      - name: debug post rust/env
+        run: |
+          echo "PATH=$PATH"
+          echo "--- /etc/environment ---"; cat /etc/environment
+          echo "--- .path ---"; cat /home/runner/actions-runner/.path 2>/dev/null || echo "no .path"
+          echo "--- .env ---";  cat /home/runner/actions-runner/.env  2>/dev/null || echo "no .env"
+          ls -la /usr/share/rust/.cargo/bin 2>/dev/null || echo "rust bin not there"
+          command -v rustup || true
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -221,6 +309,14 @@ jobs:
 
       - name: Install dependencies
         run: yarn install
+      - name: debug post rust/env
+        run: |
+          echo "PATH=$PATH"
+          echo "--- /etc/environment ---"; cat /etc/environment
+          echo "--- .path ---"; cat /home/runner/actions-runner/.path 2>/dev/null || echo "no .path"
+          echo "--- .env ---";  cat /home/runner/actions-runner/.env  2>/dev/null || echo "no .env"
+          ls -la /usr/share/rust/.cargo/bin 2>/dev/null || echo "rust bin not there"
+          command -v rustup || true
 
       - name: Run ESLint
         run: yarn lint || true
