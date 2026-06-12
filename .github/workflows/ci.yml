@@ -118,14 +118,12 @@ jobs:
             --dialect postgres \
             --mode batch \
             --json-output /tmp/fs_cli_fix_perf.json
-
       - name: Enforce perf budget
         run: |
           python3 - <<'PY'
           import json
           import pathlib
           import os
-
           report = pathlib.Path('/tmp/fs_cli_fix_perf.json')
           payload = json.loads(report.read_text())
           elapsed_ms = float(payload['result']['elapsed_ms'])
@@ -142,7 +140,6 @@ jobs:
                   f'CLI fix performance regression: elapsed {elapsed_ms:.3f}ms exceeds budget {budget_ms:.1f}ms'
               )
           PY
-
       - name: Upload perf telemetry
         if: always()
         uses: actions/upload-artifact@v4
@@ -151,7 +148,6 @@ jobs:
           path: |
             /tmp/fs_cli_fix_perf.json
             /tmp/fs_cli_fix_perf_summary.txt
-
   wasm-build:
     name: WASM Build
     runs-on: monkci-ubuntu-24.04-4
@@ -299,7 +295,6 @@ jobs:
         run: |
           cargo test -p flowscope-core --test schema_guard --locked
           cd packages/core && yarn test schema-compat.test.ts --silent
-
   lint:
     name: Lint
     runs-on: monkci-ubuntu-24.04-4
@@ -374,7 +369,6 @@ jobs:
           rm -rf crates/flowscope-cli/embedded-app
           mkdir -p crates/flowscope-cli/embedded-app
           cp -R app/dist/. crates/flowscope-cli/embedded-app/
-
       - name: Build CLI with serve feature
         run: cargo build -p flowscope-cli --features serve --release
 
